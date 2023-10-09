@@ -1,0 +1,135 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="820" viewBox="0 0 1500 820">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f8fbff"/>
+      <stop offset="1" stop-color="#fff7ed"/>
+    </linearGradient>
+    <filter id="shadow" x="-15%" y="-15%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#0f172a" flood-opacity="0.12"/>
+    </filter>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 8 4 L 0 8 z" fill="#334155"/>
+    </marker>
+    <marker id="arrowBlue" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 8 4 L 0 8 z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrowOrange" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 8 4 L 0 8 z" fill="#ea580c"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 8 4 L 0 8 z" fill="#16a34a"/>
+    </marker>
+    <style>
+      .title { font: 800 30px "Noto Sans CJK SC", "Microsoft YaHei", Arial, sans-serif; fill: #0f172a; }
+      .subtitle { font: 500 16px "Noto Sans CJK SC", "Microsoft YaHei", Arial, sans-serif; fill: #475569; }
+      .module { font: 800 21px "Noto Sans CJK SC", "Microsoft YaHei", Arial, sans-serif; fill: #0f172a; }
+      .desc { font: 500 14px "Noto Sans CJK SC", "Microsoft YaHei", Arial, sans-serif; fill: #475569; }
+      .step-title { font: 800 17px "Noto Sans CJK SC", "Microsoft YaHei", Arial, sans-serif; fill: #0f172a; }
+      .step-text { font: 500 13px "Noto Sans CJK SC", "Microsoft YaHei", Arial, sans-serif; fill: #334155; }
+      .label { font: 700 13px "Noto Sans CJK SC", "Microsoft YaHei", Arial, sans-serif; fill: #0f172a; }
+      .num { font: 800 13px "Noto Sans CJK SC", "Microsoft YaHei", Arial, sans-serif; fill: #ffffff; }
+      .status { font: 700 13px "Noto Sans CJK SC", "Microsoft YaHei", Arial, sans-serif; fill: #7c2d12; }
+    </style>
+  </defs>
+
+  <rect width="1500" height="820" fill="url(#bg)"/>
+  <rect x="38" y="30" width="1424" height="760" rx="28" fill="#ffffff" opacity="0.84"/>
+  <text x="70" y="82" class="title">任务在 4 个模块之间的交互流程</text>
+  <text x="70" y="112" class="subtitle">任务从 GitHub Actions 进入外网任务网关，由内网 master 主动拉取并触发 Jenkins，最终结果沿原路径回传。</text>
+
+  <!-- Module lanes -->
+  <rect x="70" y="150" width="305" height="540" rx="22" fill="#eff6ff" stroke="#93c5fd" stroke-width="2"/>
+  <rect x="415" y="150" width="330" height="540" rx="22" fill="#f8fafc" stroke="#cbd5e1" stroke-width="2"/>
+  <rect x="785" y="150" width="285" height="540" rx="22" fill="#fff7ed" stroke="#fdba74" stroke-width="2"/>
+  <rect x="1110" y="150" width="320" height="540" rx="22" fill="#f0fdf4" stroke="#86efac" stroke-width="2"/>
+
+  <text x="100" y="192" class="module">模块一：触发与回传</text>
+  <text x="100" y="216" class="desc">GitHub workflow / run_mlu_ci.py</text>
+  <text x="445" y="192" class="module">模块二：外网任务网关</text>
+  <text x="445" y="216" class="desc">bridge.py / slave.py / Task DB</text>
+  <text x="815" y="192" class="module">模块三：内网调度</text>
+  <text x="815" y="216" class="desc">master.py</text>
+  <text x="1140" y="192" class="module">模块四：Jenkins 执行</text>
+  <text x="1140" y="216" class="desc">Jenkins job / Pipeline / MLU Pod</text>
+
+  <!-- Step boxes -->
+  <rect x="105" y="265" width="230" height="94" rx="16" fill="#ffffff" stroke="#60a5fa" stroke-width="2" filter="url(#shadow)"/>
+  <circle cx="126" cy="287" r="13" fill="#2563eb"/><text x="122" y="292" class="num">1</text>
+  <text x="148" y="292" class="step-title">生成任务</text>
+  <text x="126" y="320" class="step-text">repo_url / git_ref / commit_sha</text>
+  <text x="126" y="343" class="step-text">trigger_type / timestamp</text>
+
+  <rect x="450" y="250" width="260" height="100" rx="16" fill="#ffffff" stroke="#64748b" stroke-width="2" filter="url(#shadow)"/>
+  <circle cx="471" cy="272" r="13" fill="#475569"/><text x="467" y="277" class="num">2</text>
+  <text x="493" y="277" class="step-title">bridge 接收请求</text>
+  <text x="471" y="305" class="step-text">校验 repo，转发给 slave</text>
+  <text x="471" y="328" class="step-text">返回 task_id 给 Actions</text>
+
+  <rect x="450" y="395" width="260" height="105" rx="16" fill="#ffffff" stroke="#64748b" stroke-width="2" filter="url(#shadow)"/>
+  <circle cx="471" cy="417" r="13" fill="#475569"/><text x="467" y="422" class="num">3</text>
+  <text x="493" y="422" class="step-title">slave 保存状态</text>
+  <text x="471" y="450" class="step-text">写入任务 DB</text>
+  <text x="471" y="473" class="step-text">初始状态：running</text>
+
+  <rect x="820" y="330" width="215" height="120" rx="16" fill="#ffffff" stroke="#ea580c" stroke-width="2" filter="url(#shadow)"/>
+  <circle cx="841" cy="352" r="13" fill="#ea580c"/><text x="837" y="357" class="num">4</text>
+  <text x="863" y="357" class="step-title">master 拉任务</text>
+  <text x="841" y="385" class="step-text">GET active tasks</text>
+  <text x="841" y="408" class="step-text">发现 running task</text>
+  <text x="841" y="431" class="step-text">准备触发 Jenkins</text>
+
+  <rect x="1145" y="265" width="250" height="105" rx="16" fill="#ffffff" stroke="#22c55e" stroke-width="2" filter="url(#shadow)"/>
+  <circle cx="1166" cy="287" r="13" fill="#16a34a"/><text x="1162" y="292" class="num">5</text>
+  <text x="1188" y="292" class="step-title">Jenkins 建立 build</text>
+  <text x="1166" y="320" class="step-text">buildWithParameters</text>
+  <text x="1166" y="343" class="step-text">返回 queue / build id</text>
+
+  <rect x="1145" y="430" width="250" height="128" rx="16" fill="#ffffff" stroke="#22c55e" stroke-width="2" filter="url(#shadow)"/>
+  <circle cx="1166" cy="452" r="13" fill="#16a34a"/><text x="1162" y="457" class="num">6</text>
+  <text x="1188" y="457" class="step-title">执行 MLU CI</text>
+  <text x="1166" y="485" class="step-text">clone + checkout</text>
+  <text x="1166" y="508" class="step-text">拉起 MLU 容器</text>
+  <text x="1166" y="531" class="step-text">安装依赖并运行测试</text>
+
+  <rect x="820" y="520" width="215" height="100" rx="16" fill="#ffffff" stroke="#ea580c" stroke-width="2" filter="url(#shadow)"/>
+  <circle cx="841" cy="542" r="13" fill="#ea580c"/><text x="837" y="547" class="num">7</text>
+  <text x="863" y="547" class="step-title">master 写回结果</text>
+  <text x="841" y="575" class="step-text">success / *_fail / error</text>
+  <text x="841" y="598" class="step-text">附带 Jenkins build id</text>
+
+  <rect x="105" y="535" width="230" height="96" rx="16" fill="#ffffff" stroke="#60a5fa" stroke-width="2" filter="url(#shadow)"/>
+  <circle cx="126" cy="557" r="13" fill="#2563eb"/><text x="122" y="562" class="num">8</text>
+  <text x="148" y="562" class="step-title">Actions 获取终态</text>
+  <text x="126" y="590" class="step-text">轮询 get_status</text>
+  <text x="126" y="613" class="step-text">成功则通过，失败则报错</text>
+
+  <!-- Arrows -->
+  <path d="M 335 312 C 378 312, 406 300, 450 300" fill="none" stroke="#2563eb" stroke-width="2.3" marker-end="url(#arrowBlue)"/>
+  <text x="356" y="285" class="label">POST 任务</text>
+
+  <path d="M 580 350 L 580 395" fill="none" stroke="#334155" stroke-width="2.3" marker-end="url(#arrow)"/>
+  <text x="598" y="381" class="label">保存</text>
+
+  <path d="M 820 386 C 770 386, 760 448, 710 448" fill="none" stroke="#ea580c" stroke-width="2.3" marker-end="url(#arrowOrange)"/>
+  <text x="720" y="374" class="label">主动拉取</text>
+
+  <path d="M 1035 372 C 1080 342, 1100 322, 1145 318" fill="none" stroke="#ea580c" stroke-width="2.3" marker-end="url(#arrowOrange)"/>
+  <text x="1058" y="326" class="label">触发 Jenkins</text>
+
+  <path d="M 1270 370 L 1270 430" fill="none" stroke="#16a34a" stroke-width="2.3" marker-end="url(#arrowGreen)"/>
+  <text x="1288" y="408" class="label">启动执行</text>
+
+  <path d="M 1145 548 C 1088 564, 1070 572, 1035 572" fill="none" stroke="#16a34a" stroke-width="2.3" stroke-dasharray="7 6" marker-end="url(#arrowGreen)"/>
+  <text x="1055" y="545" class="label">返回结果</text>
+
+  <path d="M 820 570 C 760 570, 742 500, 710 475" fill="none" stroke="#ea580c" stroke-width="2.3" stroke-dasharray="7 6" marker-end="url(#arrowOrange)"/>
+  <text x="720" y="612" class="label">写回终态</text>
+
+  <path d="M 450 456 C 365 468, 342 570, 335 584" fill="none" stroke="#2563eb" stroke-width="2.3" stroke-dasharray="7 6" marker-end="url(#arrowBlue)"/>
+  <text x="355" y="535" class="label">轮询状态</text>
+
+  <!-- Status strip -->
+  <rect x="90" y="720" width="1320" height="54" rx="18" fill="#fff7ed" stroke="#fed7aa" stroke-width="2"/>
+  <text x="120" y="754" class="status">状态流转：</text>
+  <text x="205" y="754" class="step-text">running（任务入队） -> working（Jenkins 已触发） -> success / clone_fail / build_fail / test_fail / error（终态）</text>
+</svg>

@@ -1,0 +1,161 @@
+library "cambricon-pipe-lib@master"
+
+// Jenkins-side executor for SGLang MLU CI requests submitted by the Cambricon MLU
+// bridge. GitHub Actions only submits metadata; the image, MLU resource,
+// install, and test logic are owned by this pipeline.
+def defaultDockerImage = "yellow.hub.cambricon.com/cambricon_pytorch_container/cambricon_pytorch_container:v26.04.0-torch2.11.0-torchmlu1.32.2-ubuntu22.04-py310"
+def defaultRepoUrl = "https://github.com/sgl-project/sglang.git"
+properties([
+    parameters([
+        string(name: 'repo', defaultValue: 'sglang', description: 'Repository name submitted by the Cambricon MLU bridge.'),
+        string(name: 'timestamp', defaultValue: '', description: 'Task timestamp submitted by the Cambricon MLU bridge.'),
+        string(name: 'pr_id', defaultValue: '', description: 'GitHub pull request id. Empty means test the default branch.'),
+        string(name: 'task_id', defaultValue: '', description: 'MLU CI task id used for status correlation.'),
+        string(name: 'trigger_type', defaultValue: 'ci', description: 'ci or nightly.'),
+        string(name: 'repo_url', defaultValue: defaultRepoUrl, description: 'Git repository URL to clone.'),
+        string(name: 'git_ref', defaultValue: '', description: 'Git ref or branch to test when commit_sha is empty.'),
+        string(name: 'commit_sha', defaultValue: '', description: 'Exact commit SHA to test.'),
+        string(name: 'dockerImage', defaultValue: defaultDockerImage, description: 'SGLang MLU CI container image.'),
+    ])
+])
+env.dockerImage = params.dockerImage ?: defaultDockerImage
+env.repoUrl = params.repo_url ?: defaultRepoUrl
+
+cnpipe {
+    task('stage0_clone_sglang_task') {
+        stage 'clone_sglang_task'
+        node {
+        }
+        container {
+            image env.dockerImage
+            pullImage "Always"
+        }
+        script '''
+            set -euxo pipefail
+            git config --global http.sslVerify false
+            repo_url="${repo_url:-${SGLANG_REPO_URL:-${repoUrl:-https://github.com/sgl-project/sglang.git}}}"
+            target_ref="${git_ref:-}"
+            target_sha="${commit_sha:-}"
+
+            if [[ "${repo_url}" == git@github.com:* || "${repo_url}" == ssh://git@github.com/* ]]; then
+                mkdir -p "${HOME}/.ssh"
+                chmod 700 "${HOME}/.ssh"
+                ssh-keyscan -t rsa,ecdsa,ed25519 github.com >> "${HOME}/.ssh/known_hosts" 2>/dev/null || true
+                chmod 600 "${HOME}/.ssh/known_hosts" || true
+                export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new"
+            fi
+
+            git clone "${repo_url}" sglang
+            cd sglang
+
+            if [ -n "${target_sha}" ]; then
+                git fetch origin "${target_sha}"
+                git checkout FETCH_HEAD
+            elif [ -n "${target_ref}" ]; then
+                git fetch origin "${target_ref}:local_test"
+                git checkout local_test
+            elif [ -n "${pr_id:-}" ] && [[ "${repo_url}" == *github.com* ]]; then
+                git fetch origin "pull/${pr_id}/head:local_test"
+                git checkout local_test
+            else
+                git log -1
+            fi
+
+            git log -1 --stat
+            git submodule update --init --recursive || true
+        '''
+        timeout 30
+        stash 'sglang', 'sglang-pr'
+    }
+
+    task('stage4_mlu_ci_task') {
+        stage 'mlu_ci_task'
+        node {
+            cardType 'MLU590-M9DK','MLU590-H8','MLU590-M9U','MLU590-M9B'
+        }
+        container {
+            image env.dockerImage
+            pullImage "Always"
+            runArgs "--shm-size 512G --network=host --privileged -v /data:/data -v /data2:/data2 -v /opt:/infer_models -v /usr/bin/cnmon:/usr/bin/cnmon"
+        }
+        resReq {
+            reqMlus 2
+            lmtMlus 2
+            reqCpu 8
+            lmtCpu 16
+            reqMemory '120Gi'
+            lmtMemory '160Gi'
+            reqEphemeralStorage '80Gi'
+            lmtEphemeralStorage '100Gi'
+            modifyShm true
+        }
+        unstash 'sglang-pr'
+        script '''
+            set -eo pipefail
+            ci_work_dir="${CI_WORK_DIR:-$PWD}"
+            log_dir="${ci_work_dir}/logs"
+            mkdir -p "${log_dir}/tmp"
+            export TMPDIR="${log_dir}/tmp"
+
+            source /torch/venv3/pytorch_infer/bin/activate
+            set -ux
+
+            cnmon info 2>&1 | tee "${log_dir}/cnmoninfo.log" || cnmon 2>&1 | tee "${log_dir}/cnmoninfo.log" || true
+
+            python3 - <<'PY'
+import torch
+import torch_mlu  # noqa: F401
+print("torch:", torch.__version__)
+print("MLU available:", torch.mlu.is_available(), "count:", torch.mlu.device_count())
+PY
+
+            trigger="${trigger_type:-ci}"
+            case "${trigger}" in
+                ci|pr|pull_request|push)
+                    suite="stage-a-test-1-mlu"
+                    nightly_args=""
+                    timeout_per_file="1200"
+                    ;;
+                nightly)
+                    suite="nightly-1-mlu"
+                    nightly_args="--nightly --continue-on-error"
+                    timeout_per_file="3600"
+                    ;;
+                *)
+                    echo "Unsupported SGLang MLU trigger_type: ${trigger}"
+                    exit 1
+                    ;;
+            esac
+
+            cd sglang
+            if [ ! -f python/pyproject_mlu.toml ]; then
+                echo "python/pyproject_mlu.toml is required by MLU CI but was not found."
+                exit 1
+            fi
+
+            cp python/pyproject.toml python/pyproject.toml.ci.bak
+            restore_pyproject() {
+                if [ -f python/pyproject.toml.ci.bak ]; then
+                    mv python/pyproject.toml.ci.bak python/pyproject.toml
+                fi
+            }
+            trap restore_pyproject EXIT
+            cp python/pyproject_mlu.toml python/pyproject.toml
+
+            python3 -m pip install -e "python[dev_mlu]" --no-build-isolation
+            restore_pyproject
+            trap - EXIT
+
+            export PYTHONPATH="$PWD/python:${PYTHONPATH:-}"
+            export SGLANG_PLATFORM=mlu
+            export SGLANG_IS_IN_CI=true
+            export MLU_VISIBLE_DEVICES="${MLU_VISIBLE_DEVICES:-0}"
+            export MLU_QWEN3_14B_MODEL_PATH="${MLU_QWEN3_14B_MODEL_PATH:-/data/models/Qwen3-14B/}"
+
+            python3 test/run_suite.py --hw mlu --suite "${suite}" ${nightly_args} --timeout-per-file "${timeout_per_file}" \
+                2>&1 | tee "${log_dir}/${suite}.log"
+        '''
+        archiveLog 'logs/', false
+        timeout 480
+    }
+}

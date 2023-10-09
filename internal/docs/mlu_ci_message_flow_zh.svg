@@ -1,0 +1,151 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="980" viewBox="0 0 1600 980">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f8fbff"/>
+      <stop offset="0.55" stop-color="#f7fafc"/>
+      <stop offset="1" stop-color="#fff7ed"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="10" flood-color="#0f172a" flood-opacity="0.14"/>
+    </filter>
+    <marker id="arrowBlue" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 8 4 L 0 8 z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrowOrange" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 8 4 L 0 8 z" fill="#ea580c"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 8 4 L 0 8 z" fill="#16a34a"/>
+    </marker>
+    <marker id="arrowRed" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 8 4 L 0 8 z" fill="#dc2626"/>
+    </marker>
+    <style>
+      .title { font: 800 34px "Noto Sans CJK SC", "Microsoft YaHei", Arial, sans-serif; fill: #0f172a; }
+      .subtitle { font: 500 17px "Noto Sans CJK SC", "Microsoft YaHei", Arial, sans-serif; fill: #475569; }
+      .lane-title { font: 800 22px "Noto Sans CJK SC", "Microsoft YaHei", Arial, sans-serif; fill: #0f172a; }
+      .lane-sub { font: 500 14px "Noto Sans CJK SC", "Microsoft YaHei", Arial, sans-serif; fill: #64748b; }
+      .box-title { font: 800 20px "Noto Sans CJK SC", "Microsoft YaHei", Arial, sans-serif; fill: #0f172a; }
+      .box-text { font: 500 15px "Noto Sans CJK SC", "Microsoft YaHei", Arial, sans-serif; fill: #334155; }
+      .small { font: 500 13px "Noto Sans CJK SC", "Microsoft YaHei", Arial, sans-serif; fill: #475569; }
+      .num { font: 800 16px "Noto Sans CJK SC", "Microsoft YaHei", Arial, sans-serif; fill: #fff; }
+      .label { font: 700 14px "Noto Sans CJK SC", "Microsoft YaHei", Arial, sans-serif; fill: #0f172a; }
+      .callout { font: 700 15px "Noto Sans CJK SC", "Microsoft YaHei", Arial, sans-serif; fill: #7c2d12; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="980" fill="url(#bg)"/>
+  <rect x="34" y="28" width="1532" height="922" rx="30" fill="#ffffff" opacity="0.78"/>
+
+
+  <!-- Swimlanes -->
+  <rect x="60" y="150" width="300" height="650" rx="24" fill="#eff6ff" stroke="#93c5fd" stroke-width="2"/>
+  <rect x="390" y="150" width="360" height="650" rx="24" fill="#f8fafc" stroke="#cbd5e1" stroke-width="2"/>
+  <rect x="790" y="150" width="260" height="650" rx="24" fill="#fff7ed" stroke="#fdba74" stroke-width="2"/>
+  <rect x="1090" y="150" width="450" height="650" rx="24" fill="#f0fdf4" stroke="#86efac" stroke-width="2"/>
+
+  <text x="90" y="190" class="lane-title">GitHub Actions</text>
+  <text x="420" y="190" class="lane-title">Runner / VPS</text>
+  <text x="820" y="190" class="lane-title">Master</text>
+  <text x="1120" y="190" class="lane-title">Jenkins / MLU</text>
+
+  <!-- Nodes -->
+  <rect x="92" y="275" width="236" height="132" rx="18" fill="#ffffff" stroke="#60a5fa" stroke-width="2.5" filter="url(#shadow)"/>
+  <circle cx="118" cy="302" r="16" fill="#2563eb"/><text x="113" y="308" class="num">1</text>
+  <text x="142" y="306" class="box-title">Workflow 触发</text>
+  <text x="116" y="336" class="box-text">push / PR / nightly</text>
+  <text x="116" y="362" class="box-text">收集 repo/ref/sha</text>
+  <text x="116" y="388" class="box-text">调用 run_mlu_ci.py</text>
+
+  <rect x="438" y="245" width="260" height="130" rx="18" fill="#ffffff" stroke="#64748b" stroke-width="2.5" filter="url(#shadow)"/>
+  <circle cx="464" cy="272" r="16" fill="#475569"/><text x="459" y="278" class="num">2</text>
+  <text x="488" y="276" class="box-title">bridge.py</text>
+  <text x="462" y="316" class="box-text">接收任务 / 代理查询</text>
+  <text x="462" y="342" class="box-text">不保存 Jenkins 凭据</text>
+
+  <rect x="438" y="452" width="260" height="138" rx="18" fill="#ffffff" stroke="#64748b" stroke-width="2.5" filter="url(#shadow)"/>
+  <circle cx="464" cy="479" r="16" fill="#475569"/><text x="459" y="485" class="num">3</text>
+  <text x="488" y="483" class="box-title">slave.py</text>
+  <text x="462" y="513" class="box-text">任务队列 + 状态服务</text>
+  <text x="462" y="539" class="box-text">保存 running/working</text>
+  <text x="462" y="565" class="box-text">接收 master 结果回写</text>
+
+  <rect x="476" y="640" width="184" height="78" rx="16" fill="#fef9c3" stroke="#ca8a04" stroke-width="2"/>
+  <text x="520" y="672" class="box-title">Task DB</text>
+  <text x="500" y="698" class="box-text">sglang_tasks.json</text>
+
+  <rect x="820" y="338" width="200" height="158" rx="18" fill="#ffffff" stroke="#ea580c" stroke-width="2.5" filter="url(#shadow)"/>
+  <circle cx="846" cy="365" r="16" fill="#ea580c"/><text x="841" y="371" class="num">4</text>
+  <text x="870" y="369" class="box-title">master.py</text>
+  <text x="846" y="399" class="box-text">内网主动拉任务</text>
+  <text x="846" y="425" class="box-text">触发 Jenkins</text>
+  <text x="846" y="451" class="box-text">轮询 build 结果</text>
+  <text x="846" y="477" class="box-text">回写任务终态</text>
+
+  <rect x="1130" y="242" width="278" height="118" rx="18" fill="#ffffff" stroke="#22c55e" stroke-width="2.5" filter="url(#shadow)"/>
+  <circle cx="1156" cy="269" r="16" fill="#16a34a"/><text x="1151" y="275" class="num">5</text>
+  <text x="1180" y="273" class="box-title">Jenkins Job</text>
+  <text x="1156" y="303" class="box-text">SGLANG/DEBUG/sglang_ci</text>
+  <text x="1156" y="329" class="box-text">buildWithParameters</text>
+
+  <rect x="1130" y="430" width="278" height="142" rx="18" fill="#ffffff" stroke="#22c55e" stroke-width="2.5" filter="url(#shadow)"/>
+  <circle cx="1156" cy="457" r="16" fill="#16a34a"/><text x="1151" y="463" class="num">6</text>
+  <text x="1180" y="461" class="box-title">Pipeline</text>
+  <text x="1156" y="491" class="box-text">jenkins_sglang.pipeline</text>
+  <text x="1156" y="517" class="box-text">clone / checkout</text>
+  <text x="1156" y="543" class="box-text">申请 MLU 资源</text>
+
+  <rect x="1130" y="634" width="278" height="126" rx="18" fill="#ffffff" stroke="#22c55e" stroke-width="2.5" filter="url(#shadow)"/>
+  <circle cx="1156" cy="661" r="16" fill="#16a34a"/><text x="1151" y="667" class="num">7</text>
+  <text x="1180" y="665" class="box-title">MLU Pod / Container</text>
+  <text x="1156" y="695" class="box-text">pip install -e python[dev_mlu]</text>
+  <text x="1156" y="721" class="box-text">test/run_suite.py --hw mlu</text>
+  <text x="1156" y="747" class="box-text">归档 logs</text>
+
+  <!-- Main arrows -->
+  <path d="M 328 340 C 368 340, 396 310, 438 310" fill="none" stroke="#2563eb" stroke-width="2.4" marker-end="url(#arrowBlue)"/>
+  <text x="348" y="300" class="label">A. POST 提交任务</text>
+  <text x="348" y="321" class="small">repo_url / ref / sha</text>
+
+  <path d="M 568 375 L 568 452" fill="none" stroke="#475569" stroke-width="2.4" marker-end="url(#arrowBlue)"/>
+  <text x="586" y="420" class="label">B. 转发任务</text>
+
+  <path d="M 568 590 L 568 640" fill="none" stroke="#ca8a04" stroke-width="2.4" marker-end="url(#arrowBlue)"/>
+  <text x="586" y="625" class="small">写入状态</text>
+
+  <path d="M 820 402 C 750 402, 736 520, 698 520" fill="none" stroke="#ea580c" stroke-width="2.4" marker-end="url(#arrowOrange)"/>
+  <text x="704" y="454" class="label">C. GET 拉取 active task</text>
+  <text x="704" y="475" class="small">内网主动访问外网/DMZ</text>
+
+  <path d="M 1020 390 C 1060 370, 1092 320, 1130 306" fill="none" stroke="#ea580c" stroke-width="2.4" marker-end="url(#arrowOrange)"/>
+  <text x="1035" y="333" class="label">D. 触发 Jenkins</text>
+  <text x="1035" y="354" class="small">buildWithParameters</text>
+
+  <path d="M 1270 360 L 1270 430" fill="none" stroke="#16a34a" stroke-width="2.4" marker-end="url(#arrowGreen)"/>
+  <text x="1288" y="405" class="label">E. 启动 Pipeline</text>
+
+  <path d="M 1270 572 L 1270 634" fill="none" stroke="#16a34a" stroke-width="2.4" marker-end="url(#arrowGreen)"/>
+  <text x="1288" y="610" class="label">F. 执行测试</text>
+
+  <!-- Result/status arrows -->
+  <path d="M 1130 264 C 1066 236, 982 266, 955 338" fill="none" stroke="#ea580c" stroke-width="1.8" stroke-dasharray="9 7" marker-end="url(#arrowOrange)"/>
+  <text x="970" y="254" class="label">返回 queue / build id</text>
+
+  <path d="M 820 474 C 740 575, 720 562, 698 552" fill="none" stroke="#ea580c" stroke-width="1.8" stroke-dasharray="9 7" marker-end="url(#arrowOrange)"/>
+  <text x="708" y="610" class="label">G. 回写 working / 终态</text>
+
+  <path d="M 438 548 C 350 574, 318 500, 268 407" fill="none" stroke="#2563eb" stroke-width="1.8" stroke-dasharray="9 7" marker-end="url(#arrowBlue)"/>
+  <text x="132" y="500" class="label">H. get_status / end_job</text>
+  <text x="132" y="521" class="small">GitHub Actions 轮询状态</text>
+
+  <!-- Forbidden access -->
+  <path d="M 220 258 C 455 60, 1005 70, 1210 220" fill="none" stroke="#dc2626" stroke-width="1.8" stroke-dasharray="8 8" marker-end="url(#arrowRed)" opacity="0.75"/>
+  <text x="655" y="132" class="callout">禁止：GitHub Actions 直接访问 Jenkins / 内网资源</text>
+
+  <!-- Bottom legend -->
+  <rect x="70" y="840" width="1460" height="92" rx="22" fill="#ffffff" stroke="#e2e8f0" stroke-width="2"/>
+  <text x="100" y="875" class="box-title">关键结论</text>
+  <text x="100" y="906" class="box-text">1. bridge.py 和 slave.py 放在外网/DMZ，只负责接收任务和保存状态。</text>
+  <text x="580" y="906" class="box-text">2. master.py 放在公司内网，是唯一访问 Jenkins 的中间层。</text>
+  <text x="1070" y="906" class="box-text">3. Jenkins/MLU 资源不对外暴露。</text>
+</svg>
