@@ -181,6 +181,19 @@ def is_npu() -> bool:
 
 
 @lru_cache(maxsize=1)
+def is_mlu() -> bool:
+    if not hasattr(torch, "mlu"):
+        return False
+
+    if not torch.mlu.is_available():
+        raise RuntimeError(
+            "torch_mlu detected, but MLU device is not available or visible."
+        )
+
+    return True
+
+
+@lru_cache(maxsize=1)
 def is_host_cpu_x86() -> bool:
     machine = platform.machine().lower()
     return (
@@ -631,6 +644,18 @@ def get_available_gpu_memory(
                 free_gpu_memory, total_gpu_memory = torch.npu.mem_get_info()
         else:
             free_gpu_memory, total_gpu_memory = torch.npu.mem_get_info()
+    elif device == "mlu":
+        num_gpus = torch.mlu.device_count()
+        assert gpu_id < num_gpus
+
+        if torch.mlu.current_device() != gpu_id:
+            print(
+                f"WARNING: current device is not {gpu_id}, but {torch.mlu.current_device()}, ",
+                "which may cause useless memory allocation for torch MLU context.",
+            )
+        if empty_cache:
+            empty_device_cache(torch.mlu)
+        free_gpu_memory, total_gpu_memory = torch.mlu.mem_get_info(gpu_id)
     elif device == "musa":
         num_gpus = torch.musa.device_count()
         assert gpu_id < num_gpus
@@ -1988,6 +2013,9 @@ def get_device_name(device_id: int = 0) -> str:
     if hasattr(torch, "npu") and torch.npu.is_available():
         return torch.npu.get_device_name(device_id)
 
+    if hasattr(torch, "mlu") and torch.mlu.is_available():
+        return torch.mlu.get_device_name(device_id)
+
 
 @lru_cache(maxsize=1)
 def is_habana_available() -> bool:
@@ -2020,6 +2048,11 @@ def get_device(device_id: Optional[int] = None) -> str:
             return "npu"
         return "npu:{}".format(device_id)
 
+    if is_mlu():
+        if device_id is None:
+            return "mlu"
+        return "mlu:{}".format(device_id)
+
     if is_habana_available():
         try:
             import habana_frameworks.torch.hpu  # noqa: F401
@@ -2043,7 +2076,9 @@ def get_device(device_id: Optional[int] = None) -> str:
             return "mps"
         return "mps:{}".format(device_id)
 
-    raise RuntimeError("No accelerator (CUDA, XPU, HPU, NPU, MUSA, MPS) is available.")
+    raise RuntimeError(
+        "No accelerator (CUDA, XPU, HPU, NPU, MLU, MUSA, MPS) is available."
+    )
 
 
 @lru_cache(maxsize=1)
@@ -2069,6 +2104,12 @@ def get_device_count() -> int:
         except (ImportError, RuntimeError):
             return 0
 
+    if hasattr(torch, "mlu") and torch.mlu.is_available():
+        try:
+            return torch.mlu.device_count()
+        except RuntimeError:
+            return 0
+
     return 0  # No accelerators available
 
 
@@ -2077,6 +2118,9 @@ def get_device_core_count(device_id: int = 0) -> int:
         return torch.cuda.get_device_properties(device_id).multi_processor_count
     elif hasattr(torch, "xpu") and torch.xpu.is_available():
         return torch.xpu.get_device_properties(device_id).gpu_eu_count
+    elif hasattr(torch, "mlu") and torch.mlu.is_available():
+        props = torch.mlu.get_device_properties(device_id)
+        return int(getattr(props, "multi_processor_count", 0))
 
     return 0
 

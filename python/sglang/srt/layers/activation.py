@@ -37,6 +37,7 @@ from sglang.srt.utils import (
     is_cpu,
     is_cuda,
     is_hip,
+    is_mlu,
     is_musa,
     is_npu,
     is_xpu,
@@ -46,6 +47,7 @@ from sglang.utils import resolve_obj_by_qualname
 
 _is_cuda = is_cuda()
 _is_musa = is_musa()
+_is_mlu = is_mlu()
 _is_npu = is_npu()
 _is_cpu_amx_available = cpu_has_amx_support()
 _is_cpu = is_cpu()
@@ -71,6 +73,9 @@ elif _is_musa:
         d = x.shape[-1] // 2
         output_shape = x.shape[:-1] + (d,)
         return torch.empty(output_shape, dtype=x.dtype, device=x.device)
+
+elif _is_mlu:
+    import torch_mlu_ops
 
 
 if _use_aiter:
@@ -118,6 +123,9 @@ class SiluAndMul(MultiPlatformOp):
     def forward_npu(self, x: torch.Tensor) -> torch.Tensor:
         out = torch_npu.npu_swiglu(x)
         return out
+
+    def forward_mlu(self, x: torch.Tensor) -> torch.Tensor:
+        return torch_mlu_ops.active(input=x, act_mode="silu", is_gated=True)
 
     def forward_xpu(self, x: torch.Tensor) -> torch.Tensor:
         d = x.shape[-1] // 2
@@ -215,6 +223,9 @@ class QuickGELU(MultiPlatformOp):
 
     def forward_npu(self, x: torch.Tensor) -> torch.Tensor:
         return torch_npu.npu_fast_gelu(x)
+
+    def forward_mlu(self, x: torch.Tensor) -> torch.Tensor:
+        return torch_mlu_ops.active(input=x, act_mode="quick_gelu", is_gated=False)
 
 
 class XIELU(MultiPlatformOp):

@@ -35,6 +35,10 @@ def _is_rocm_available() -> bool:
     return bool(torch.cuda.is_available() and torch.version.hip is not None)
 
 
+def _is_mlu_available() -> bool:
+    return bool(hasattr(torch, "mlu") and torch.mlu.is_available())
+
+
 def _resolve_platform() -> SRTPlatform:
     """
     Discover and instantiate the active platform.
@@ -62,6 +66,17 @@ def _resolve_platform() -> SRTPlatform:
     selected = envs.SGLANG_PLATFORM.get()
 
     if selected:
+        if selected == "mlu":
+            if not _is_mlu_available():
+                raise RuntimeError(
+                    "SGLANG_PLATFORM='mlu' requested, but torch.mlu is not "
+                    "available on this machine."
+                )
+            from sglang.srt.platforms.mlu import MluSRTPlatform
+
+            logger.info("In-tree MLU platform activated.")
+            return MluSRTPlatform()
+
         # Front-loading filter: only import and activate the specified plugin.
         # Other plugins' modules are never loaded — avoids pulling their deps.
         discovered = entry_points(group=PLATFORM_PLUGINS_GROUP)
@@ -114,6 +129,11 @@ def _resolve_platform() -> SRTPlatform:
                 "No platform plugin detected. Using ROCm SRTPlatform defaults."
             )
             return RocmSRTPlatform()
+        if _is_mlu_available():
+            from sglang.srt.platforms.mlu import MluSRTPlatform
+
+            logger.debug("No platform plugin detected. Using MLU SRTPlatform.")
+            return MluSRTPlatform()
         logger.debug("No platform detected. Using base SRTPlatform.")
         return SRTPlatform()
 

@@ -52,6 +52,7 @@ from sglang.srt.utils import (
     is_cpu,
     is_cuda_alike,
     is_hip,
+    is_mlu,
     is_musa,
     is_npu,
     is_shm_available,
@@ -64,6 +65,7 @@ _is_npu = is_npu()
 _is_cpu = is_cpu()
 _is_xpu = is_xpu()
 _is_musa = is_musa()
+_is_mlu = is_mlu()
 
 TensorMetadata = namedtuple("TensorMetadata", ["device", "dtype", "size"])
 
@@ -249,6 +251,7 @@ class GroupCoordinator:
         use_hpu_communicator: bool,
         use_xpu_communicator: bool,
         use_npu_communicator: bool,
+        use_mlu_communicator: bool = False,
         use_message_queue_broadcaster: bool = False,
         group_name: Optional[str] = None,
         gloo_timeout: timedelta = timedelta(seconds=120 * 60),
@@ -273,6 +276,8 @@ class GroupCoordinator:
             self.device = torch.device(f"cuda:{device_id}")
         elif _is_npu:
             self.device = torch.device(f"npu:{local_rank}")
+        elif _is_mlu:
+            self.device = torch.device(f"mlu:{local_rank}")
         elif _is_xpu:
             self.device = torch.device(f"xpu:{local_rank}")
         elif _is_musa:
@@ -333,6 +338,7 @@ class GroupCoordinator:
         self.use_hpu_communicator = use_hpu_communicator
         self.use_xpu_communicator = use_xpu_communicator
         self.use_npu_communicator = use_npu_communicator
+        self.use_mlu_communicator = use_mlu_communicator
         self.use_message_queue_broadcaster = use_message_queue_broadcaster
 
         # Lazy import to avoid documentation build error
@@ -424,6 +430,9 @@ class GroupCoordinator:
         from sglang.srt.distributed.device_communicators.hpu_communicator import (
             HpuCommunicator,
         )
+        from sglang.srt.distributed.device_communicators.mlu_communicator import (
+            MluCommunicator,
+        )
         from sglang.srt.distributed.device_communicators.npu_communicator import (
             NpuCommunicator,
         )
@@ -442,6 +451,10 @@ class GroupCoordinator:
         self.npu_communicator: Optional[NpuCommunicator] = None
         if use_npu_communicator and self.world_size > 1:
             self.npu_communicator = NpuCommunicator(group=self.device_group)
+
+        self.mlu_communicator: Optional[MluCommunicator] = None
+        if use_mlu_communicator and self.world_size > 1:
+            self.mlu_communicator = MluCommunicator(group=self.device_group)
 
         # Create message queue
         from sglang.srt.distributed.device_communicators.shm_broadcast import (
@@ -593,6 +606,9 @@ class GroupCoordinator:
 
         if self.npu_communicator is not None and not self.npu_communicator.disabled:
             return self.npu_communicator.all_reduce(input_)
+
+        if self.mlu_communicator is not None and not self.mlu_communicator.disabled:
+            return self.mlu_communicator.all_reduce(input_)
 
         if self.pynccl_comm is not None and self.is_symmetric_memory_enabled():
             self.debug_check_symmetric_mempool(self, {"input": input_}, "all_reduce")
@@ -877,6 +893,10 @@ class GroupCoordinator:
         npu_comm = self.npu_communicator
         if npu_comm is not None and not npu_comm.disabled:
             return npu_comm.all_gather(input_, dim)
+
+        mlu_comm = self.mlu_communicator
+        if mlu_comm is not None and not mlu_comm.disabled:
+            return mlu_comm.all_gather(input_, dim)
 
         if dim < 0:
             # Convert negative dim to positive.
@@ -1419,6 +1439,7 @@ def init_world_group(
         use_hpu_communicator=False,
         use_xpu_communicator=False,
         use_npu_communicator=False,
+        use_mlu_communicator=False,
         group_name="world",
         recovered_rank=recovered_rank,
     )
@@ -1447,7 +1468,7 @@ def init_model_parallel_group(
         local_rank=local_rank,
         torch_distributed_backend=backend,
         use_pynccl=(
-            not (_is_npu or _is_xpu or backend == "mooncake")
+            not (_is_npu or _is_xpu or _is_mlu or backend == "mooncake")
             if use_pynccl is None
             else use_pynccl
         ),
@@ -1457,6 +1478,7 @@ def init_model_parallel_group(
         use_hpu_communicator=True,
         use_xpu_communicator=True,
         use_npu_communicator=True,
+        use_mlu_communicator=True,
         use_message_queue_broadcaster=use_message_queue_broadcaster,
         group_name=group_name,
         recovered_rank=recovered_rank,
@@ -1606,6 +1628,7 @@ _DEVICE_TO_DISTRIBUTED_BACKEND = {
     "cpu": "gloo",
     "npu": "hccl" if not envs.SGLANG_ZBAL_LOCAL_MEM_SIZE.get() > 0 else "zbal",
     "musa": "mccl",
+    "mlu": "cncl",
 }
 
 

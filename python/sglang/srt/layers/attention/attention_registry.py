@@ -106,6 +106,21 @@ def create_ascend_backend(runner):
     return AscendAttnBackend(runner)
 
 
+@register_attention_backend("cambricon")
+def create_cambricon_backend(runner):
+    if runner.use_mla_backend:
+        raise NotImplementedError(
+            "MLA is not included in the in-tree MLU demo/POC scope. "
+            "Use an MHA model path for this prototype."
+        )
+
+    from sglang.srt.hardware_backend.mlu.attention.cambricon_backend import (
+        CambriconAttnBackend,
+    )
+
+    return CambriconAttnBackend(runner)
+
+
 @register_attention_backend("dsa")
 def create_dsa_backend(runner):
     from sglang.srt.layers.attention.dsa_backend import DeepseekSparseAttnBackend

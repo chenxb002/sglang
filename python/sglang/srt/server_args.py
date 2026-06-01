@@ -185,6 +185,7 @@ ATTENTION_BACKEND_CHOICES = [
     "intel_amx",
     "ascend",
     "intel_xpu",
+    "cambricon",
 ]
 
 DETERMINISTIC_ATTENTION_BACKEND_CHOICES = ["flashinfer", "fa3", "triton"]
@@ -1340,7 +1341,7 @@ class ServerArgs:
         # 5b. OOT platforms that don't support piecewise cuda graph
         from sglang.srt.platforms import current_platform
 
-        if current_platform.is_out_of_tree():
+        if current_platform.is_out_of_tree() or current_platform.is_mlu():
             if not current_platform.support_piecewise_cuda_graph():
                 self.disable_piecewise_cuda_graph = True
         # 6. MoE A2A backend
@@ -2702,7 +2703,7 @@ class ServerArgs:
         # OOT platforms provide their own default attention backend.
         from sglang.srt.platforms import current_platform
 
-        if current_platform.is_out_of_tree():
+        if current_platform.is_out_of_tree() or current_platform.is_mlu():
             return current_platform.get_default_attention_backend()
 
         # Whisper requires flashinfer for cross-attention CUDA graph support.
