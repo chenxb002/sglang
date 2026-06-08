@@ -1,15 +1,17 @@
 import importlib
 import sys
 import unittest
+from contextlib import ExitStack
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import torch
 
+from sglang.srt.model_executor.forward_batch_info import ForwardMode
 from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import CustomTestCase
 
-register_cpu_ci(est_time=8, suite="base-a-test-cpu")
+register_cpu_ci(est_time=12, suite="base-a-test-cpu")
 
 
 def _fake_mlu_ops():
@@ -189,6 +191,109 @@ class TestMLUPagedAllocator(CustomTestCase):
         self.assertEqual(fake_kernel.kwargs, {"enable_soft_i64": True})
         self.assertEqual(out.tolist(), [0, 1, 2, 3, 4, 5])
         self.assertEqual(allocator.free_pages.tolist(), [3, 4])
+
+
+class TestMLUAttentionMetadata(CustomTestCase):
+    def _make_backend(self):
+        fake_ops = _fake_mlu_ops()
+        with patch.dict(sys.modules, {"torch_mlu_ops": fake_ops}):
+            attn_mod = importlib.import_module(
+                "sglang.srt.hardware_backend.mlu.attention.mlu_backend"
+            )
+        with patch.object(attn_mod, "torch_mlu_ops", fake_ops):
+            MLUAttnBackend = attn_mod.MLUAttnBackend
+
+            runner = SimpleNamespace(
+                device="cpu",
+                page_size=16,
+                model_config=SimpleNamespace(context_len=64),
+                req_to_token_pool=SimpleNamespace(
+                    req_to_token=torch.arange(2 * 64, dtype=torch.int32).reshape(2, 64)
+                ),
+                token_to_kv_pool=MagicMock(),
+            )
+            return MLUAttnBackend(runner)
+
+    def test_extend_metadata_tracks_uncached_prefill(self):
+        backend = self._make_backend()
+        forward_batch = SimpleNamespace(
+            forward_mode=ForwardMode.EXTEND,
+            req_pool_indices=torch.tensor([0, 1], dtype=torch.int64),
+            seq_lens=torch.tensor([4, 5], dtype=torch.int32),
+            extend_seq_lens=torch.tensor([4, 5], dtype=torch.int32),
+            extend_seq_lens_cpu=[4, 5],
+            extend_prefix_lens=torch.tensor([0, 0], dtype=torch.int32),
+            batch_size=2,
+        )
+
+        backend.init_forward_metadata(forward_batch)
+        meta = backend.forward_metadata
+
+        self.assertTrue(meta.is_uncached_prefill_only)
+        self.assertEqual(meta.max_seq_len_q, 5)
+        self.assertEqual(meta.max_seq_len_kv, 5)
+        self.assertEqual(meta.cu_seqlens_q.tolist(), [0, 4, 9])
+        self.assertEqual(meta.cu_seqlens_kv.tolist(), [0, 4, 9])
+        self.assertEqual(tuple(meta.block_tables.shape), (2, 4))
+
+    def test_decode_metadata_uses_single_token_queries(self):
+        backend = self._make_backend()
+        forward_batch = SimpleNamespace(
+            forward_mode=ForwardMode.DECODE,
+            req_pool_indices=torch.tensor([0, 1], dtype=torch.int64),
+            seq_lens=torch.tensor([7, 9], dtype=torch.int32),
+            batch_size=2,
+        )
+
+        backend.init_forward_metadata(forward_batch)
+        meta = backend.forward_metadata
+
+        self.assertEqual(meta.max_seq_len_q, 1)
+        self.assertEqual(meta.max_seq_len_kv, 9)
+        self.assertEqual(meta.cu_seqlens_q.tolist(), [0, 1, 2])
+        self.assertEqual(meta.cu_seqlens_kv.tolist(), [0, 7, 16])
+
+
+class TestMLUGraphRunner(CustomTestCase):
+    def test_graph_runner_uses_mlu_graph_api(self):
+        graph_runner_mod = importlib.import_module(
+            "sglang.srt.hardware_backend.mlu.graph_runner"
+        )
+
+        fake_graph = object()
+        fake_pool = object()
+        fake_stream = object()
+        fake_graph_ctx = MagicMock()
+        fake_graph_ctx.__enter__.return_value = None
+        fake_graph_ctx.__exit__.return_value = None
+        fake_mlu = SimpleNamespace(
+            MLUGraph=MagicMock(return_value=fake_graph),
+            graph=MagicMock(return_value=fake_graph_ctx),
+        )
+        fake_torch = SimpleNamespace(mlu=fake_mlu, int32=torch.int32)
+
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch.object(
+                    graph_runner_mod.CudaGraphRunner, "__init__", return_value=None
+                )
+            )
+            stack.enter_context(patch.object(graph_runner_mod, "torch", fake_torch))
+            runner = graph_runner_mod.MLUGraphRunner(SimpleNamespace())
+            created_graph = runner._create_device_graph()
+            cache_loc_dtype = runner._cache_loc_dtype()
+            out = runner._capture_graph(
+                fake_graph, fake_pool, fake_stream, lambda: "captured"
+            )
+
+        self.assertEqual(runner.attr_name, {})
+        self.assertEqual(runner.attr_type, {})
+        self.assertEqual(cache_loc_dtype, torch.int32)
+        self.assertIs(created_graph, fake_graph)
+        fake_mlu.graph.assert_called_once_with(
+            fake_graph, pool=fake_pool, stream=fake_stream
+        )
+        self.assertEqual(out, "captured")
 
 
 class TestMLUCommunicator(CustomTestCase):

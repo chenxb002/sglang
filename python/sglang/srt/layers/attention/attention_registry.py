@@ -106,6 +106,13 @@ def create_ascend_backend(runner):
     return AscendAttnBackend(runner)
 
 
+@register_attention_backend("mlu")
+def create_mlu_backend(runner):
+    from sglang.srt.hardware_backend.mlu.attention.mlu_backend import MLUAttnBackend
+
+    return MLUAttnBackend(runner)
+
+
 @register_attention_backend("dsa")
 def create_dsa_backend(runner):
     from sglang.srt.layers.attention.dsa_backend import DeepseekSparseAttnBackend
