@@ -2,6 +2,7 @@ import importlib
 import sys
 import unittest
 from contextlib import ExitStack
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -20,6 +21,32 @@ def _fake_mlu_ops():
         flash_attention=MagicMock(),
         single_query_cached_kv_attn=MagicMock(),
     )
+
+
+class TestMLUPyproject(CustomTestCase):
+    def test_mlu_pyproject_excludes_cuda_only_dependencies(self):
+        pyproject = Path("python/pyproject_mlu.toml").read_text()
+        cuda_only = [
+            "cuda-python",
+            "flashinfer_python",
+            "flashinfer_cubin",
+            "nvidia-cutlass-dsl",
+            "flash-attn-4",
+            "sgl-deep-gemm",
+            "sglang-kernel",
+            "tilelang",
+            "tokenspeed_mla",
+            "torch==",
+            "torchaudio==",
+            "torchvision",
+        ]
+        for dependency in cuda_only:
+            with self.subTest(dependency=dependency):
+                self.assertNotIn(dependency, pyproject)
+
+        self.assertIn("srt_mlu", pyproject)
+        self.assertIn("all_mlu", pyproject)
+        self.assertIn("dev_mlu", pyproject)
 
 
 class TestMLUKVCacheUnits(CustomTestCase):
