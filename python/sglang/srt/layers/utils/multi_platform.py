@@ -10,6 +10,7 @@ from sglang.srt.utils import (
     is_cuda,
     is_hip,
     is_musa,
+    is_mlu,
     is_npu,
     is_xpu,
 )
@@ -21,6 +22,7 @@ _is_cpu_amx_available = cpu_has_amx_support()
 _is_npu = is_npu()
 _is_xpu = is_xpu()
 _is_musa = is_musa()
+_is_mlu = is_mlu()
 
 
 class MultiPlatformOp(nn.Module):
@@ -107,8 +109,8 @@ class MultiPlatformOp(nn.Module):
         return self.forward_native(*args, **kwargs)
 
     def dispatch_forward(self):
-        # OOT platform dispatch: check registry then method lookup
-        if current_platform.is_out_of_tree():
+        # Platform-specific dispatch: check registry then method lookup.
+        if current_platform.is_out_of_tree() or current_platform.is_mlu():
             key = current_platform.get_dispatch_key_name()
             oot = self._oot_forward_registry.get(key, {})
             if type(self) in oot:
@@ -130,5 +132,10 @@ class MultiPlatformOp(nn.Module):
             return self.forward_xpu
         elif _is_musa:
             return self.forward_musa
+        elif _is_mlu:
+            method = getattr(self, "forward_mlu", None)
+            if method is not None:
+                return method
+            return self.forward_native
         else:
             return self.forward_native
