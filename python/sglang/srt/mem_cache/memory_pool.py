@@ -1508,7 +1508,7 @@ class HybridLinearKVPool(KVCache):
         if not use_mla:
             TokenToKVPoolClass = MHATokenToKVPool
 
-            if current_platform.is_out_of_tree():
+            if current_platform.is_out_of_tree() or current_platform.is_mlu():
                 TokenToKVPoolClass = current_platform.get_mha_kv_pool_cls()
             elif _is_npu:
                 from sglang.srt.hardware_backend.npu.memory_pool_npu import (
@@ -1531,7 +1531,7 @@ class HybridLinearKVPool(KVCache):
         else:
             TokenToKVPoolClass = MLATokenToKVPool
 
-            if current_platform.is_out_of_tree():
+            if current_platform.is_out_of_tree() or current_platform.is_mlu():
                 TokenToKVPoolClass = current_platform.get_mla_kv_pool_cls()
             elif _is_npu:
                 from sglang.srt.hardware_backend.npu.memory_pool_npu import (
