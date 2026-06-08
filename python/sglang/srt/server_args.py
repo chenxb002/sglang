@@ -194,6 +194,7 @@ ATTENTION_BACKEND_CHOICES = [
     "intel_amx",
     "ascend",
     "intel_xpu",
+    "mlu",
 ]
 
 DETERMINISTIC_ATTENTION_BACKEND_CHOICES = ["flashinfer", "fa3", "triton"]
@@ -944,7 +945,7 @@ class ServerArgs:
         self._handle_mps_backends()
         self._handle_xpu_backends()
 
-        # Allow OOT platform plugins to apply server args defaults.
+        # Allow platform plugins and in-tree platform modules to apply defaults.
         current_platform.apply_server_args_defaults(self)
 
         # Handle piecewise CUDA graph.
@@ -1354,11 +1355,11 @@ class ServerArgs:
         # 4. Pipeline parallelism
         if self.pp_size > 1:
             self.disable_piecewise_cuda_graph = True
-        # 5. Non-CUDA hardware (AMD, NPU, CPU, MPS, XPU, etc.)
-        if is_hip() or is_npu() or is_cpu() or is_mps() or is_xpu():
+        # 5. Non-CUDA hardware (AMD, NPU, CPU, MPS, XPU, MLU, etc.)
+        if is_hip() or is_npu() or is_cpu() or is_mps() or is_xpu() or current_platform.is_mlu():
             self.disable_piecewise_cuda_graph = True
-        # 5b. OOT platforms that don't support piecewise cuda graph
-        if current_platform.is_out_of_tree():
+        # 5b. Other platforms that don't support piecewise cuda graph
+        if current_platform.is_out_of_tree() or current_platform.is_mlu():
             if not current_platform.support_piecewise_cuda_graph():
                 self.disable_piecewise_cuda_graph = True
         # 6. MoE A2A backend
@@ -2754,8 +2755,8 @@ class ServerArgs:
             2.2 We will use Flashinfer backend on blackwell.
             2.3 Otherwise, we will use triton backend.
         """
-        # OOT platforms provide their own default attention backend.
-        if current_platform.is_out_of_tree():
+        # Non-CUDA platforms can provide their own default attention backend.
+        if current_platform.is_out_of_tree() or current_platform.is_mlu():
             return current_platform.get_default_attention_backend()
 
         # Whisper requires flashinfer for cross-attention CUDA graph support.
