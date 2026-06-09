@@ -275,6 +275,5 @@ sgl-kernel/csrc/**/*_musa/
 *.glb
 *.ply
 *.npz
-artifacts/
 .claude/scheduled_tasks.lock
 .humanize/

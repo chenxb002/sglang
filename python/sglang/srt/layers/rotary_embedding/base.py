@@ -16,6 +16,7 @@ from sglang.srt.utils import (
     is_cpu,
     is_cuda,
     is_hip,
+    is_mlu,
     is_mps,
     is_musa,
     is_npu,
@@ -29,6 +30,7 @@ _is_cuda = is_cuda()
 _is_hip = is_hip()
 _use_aiter = get_bool_env_var("SGLANG_USE_AITER") and _is_hip
 _is_npu = is_npu()
+_is_mlu = is_mlu()
 _is_cpu_amx_available = cpu_has_amx_support()
 _is_cpu = is_cpu()
 _is_xpu = is_xpu()
@@ -49,6 +51,38 @@ if _is_hip:
 
 if _is_xpu:
     from sgl_kernel import fused_qk_rope_with_cos_sin_cache_inplace
+
+if _is_mlu:
+    import torch_mlu_ops
+
+
+def _transform_cache(
+    cos_sin_cache: torch.Tensor, is_neox_style: bool
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    rotary_dim = cos_sin_cache.shape[-1]
+    assert rotary_dim % 2 == 0, f"rotary_dim must be even, got {rotary_dim}"
+
+    if is_neox_style:
+        cache = cos_sin_cache.unflatten(dim=-1, sizes=(2, -1))
+        cache = torch.tile(cache, (1, 1, 2)).flatten(start_dim=1)
+    else:
+        cache = cos_sin_cache.repeat_interleave(2, dim=-1)
+
+    cos, sin = cache.chunk(2, dim=-1)
+    sin = sin.view(-1, rotary_dim)
+    cos = cos.view(-1, rotary_dim)
+    return cos, sin
+
+
+def _get_mlu_cos_sin(rope) -> Tuple[torch.Tensor, torch.Tensor]:
+    cache_ptr = rope.cos_sin_cache.data_ptr()
+    cached_ptr = getattr(rope, "_mlu_cache_id", None)
+    if cache_ptr != cached_ptr:
+        rope._mlu_cos, rope._mlu_sin = _transform_cache(
+            rope.cos_sin_cache, rope.is_neox_style
+        )
+        rope._mlu_cache_id = cache_ptr
+    return rope._mlu_cos, rope._mlu_sin
 
 
 class RotaryEmbedding(MultiPlatformOp):
@@ -84,6 +118,7 @@ class RotaryEmbedding(MultiPlatformOp):
             and not (_is_musa)
             and not (_is_mps)
             and not (current_platform.is_out_of_tree())
+            and not (current_platform.is_mlu())
         ):
             # rotary_embedding from sglang.jit_kernel.rope and vllm._custom_ops has the same implementation.
             # TODO: Test on different devices and remove this conditional.
@@ -409,6 +444,57 @@ class RotaryEmbedding(MultiPlatformOp):
                     self.is_neox_style,
                 )
         return query, key
+
+    def forward_mlu(
+        self,
+        positions: torch.Tensor,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        offsets: Optional[torch.Tensor] = None,
+        fused_set_kv_buffer_arg: Optional[Union[FusedSetKVBufferArg, dict]] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        assert (
+            fused_set_kv_buffer_arg is None
+        ), "fused_set_kv_buffer_arg is not supported for mlu implementation"
+
+        if offsets is not None:
+            positions = positions + offsets
+        positions = positions.to(torch.int32)
+
+        cos, sin = _get_mlu_cos_sin(self)
+
+        if query is not None:
+            query = self._apply_rotary_mlu_inplace(positions, query, cos, sin)
+        if key is not None:
+            key = self._apply_rotary_mlu_inplace(positions, key, cos, sin)
+        return query, key
+
+    def _apply_rotary_mlu_inplace(
+        self,
+        positions: torch.Tensor,
+        x: torch.Tensor,
+        cos: torch.Tensor,
+        sin: torch.Tensor,
+    ) -> torch.Tensor:
+        x_shape = x.shape
+        num_tokens = positions.shape[-1]
+        x = x.view(num_tokens, -1, self.head_size).unsqueeze(0)
+        x_rot = x[..., : self.rotary_dim]
+
+        torch_mlu_ops.apply_rotary(
+            input=x_rot,
+            sin_cache=sin,
+            cos_cache=cos,
+            position_ids=positions,
+            cu_seqlens=None,
+            interleaved=not self.is_neox_style,
+            discrete=True,
+            dynamic_ntk=False,
+            max_seqlen=x_rot.shape[1],
+            output=x_rot,
+        )
+
+        return x.reshape(x_shape)
 
     def extra_repr(self) -> str:
         s = f"head_size={self.head_size}, rotary_dim={self.rotary_dim}"

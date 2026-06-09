@@ -216,6 +216,17 @@ def is_musa() -> bool:
 
 
 @lru_cache(maxsize=1)
+def is_mlu() -> bool:
+    if not hasattr(torch, "mlu"):
+        try:
+            import torch_mlu  # noqa: F401
+        except ImportError:
+            return False
+
+    return bool(torch.mlu.is_available())
+
+
+@lru_cache(maxsize=1)
 def is_mps() -> bool:
     return torch.backends.mps.is_available()
 
@@ -656,6 +667,18 @@ def get_available_gpu_memory(
             # memory metric instead.
             free_gpu_memory = psutil.virtual_memory().available
         free_gpu_memory, total_gpu_memory = torch.musa.mem_get_info()
+    elif device == "mlu":
+        num_gpus = torch.mlu.device_count()
+        assert gpu_id < num_gpus
+
+        if torch.mlu.current_device() != gpu_id:
+            print(
+                f"WARNING: current device is not {gpu_id}, but {torch.mlu.current_device()}, ",
+                "which may cause useless memory allocation for torch MLU context.",
+            )
+        if empty_cache:
+            empty_device_cache(torch.mlu)
+        free_gpu_memory, total_gpu_memory = torch.mlu.mem_get_info()
     elif device == "mps":
         free_gpu_memory = psutil.virtual_memory().available
     else:
@@ -778,6 +801,8 @@ def set_random_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
     if torch.xpu.is_available():
         torch.xpu.manual_seed_all(seed)
+    if hasattr(torch, "mlu") and torch.mlu.is_available():
+        torch.mlu.manual_seed_all(seed)
 
 
 def load_audio(
@@ -1891,8 +1916,8 @@ def get_mtgpu_memory_capacity():
 
 
 def get_device_memory_capacity(device: str = None):
-    # OOT platforms provide their own memory query via the platform class.
-    if current_platform.is_out_of_tree():
+    # OOT and MLU platforms provide their own memory query via the platform class.
+    if current_platform.is_out_of_tree() or current_platform.is_mlu():
         mem_bytes = current_platform.get_device_total_memory()
         if mem_bytes:
             return mem_bytes / (1 << 20)  # bytes -> MiB
@@ -2009,6 +2034,9 @@ def print_info_once(msg: str) -> None:
 
 
 def get_device_name(device_id: int = 0) -> str:
+    if current_platform.is_mlu():
+        return torch.mlu.get_device_name(device_id)
+
     if (hasattr(torch, "cuda") and torch.cuda.is_available()) or is_musa():
         return torch.cuda.get_device_name(device_id)
 
@@ -2020,6 +2048,9 @@ def get_device_name(device_id: int = 0) -> str:
 
     if hasattr(torch, "npu") and torch.npu.is_available():
         return torch.npu.get_device_name(device_id)
+
+    if is_mlu():
+        return torch.mlu.get_device_name(device_id)
 
 
 @lru_cache(maxsize=1)
@@ -2037,6 +2068,11 @@ def get_device(device_id: Optional[int] = None) -> str:
                 "CPU device enabled, using torch native backend, low performance expected."
             )
         return "cpu"
+
+    if current_platform.is_mlu():
+        if device_id is None:
+            return "mlu"
+        return "mlu:{}".format(device_id)
 
     if hasattr(torch, "cuda") and torch.cuda.is_available():
         if device_id is None:
@@ -2071,6 +2107,11 @@ def get_device(device_id: Optional[int] = None) -> str:
             return "musa"
         return "musa:{}".format(device_id)
 
+    if is_mlu():
+        if device_id is None:
+            return "mlu"
+        return "mlu:{}".format(device_id)
+
     if is_mps():
         if device_id is None:
             return "mps"
@@ -2086,6 +2127,12 @@ def get_device(device_id: Optional[int] = None) -> str:
 
 @lru_cache(maxsize=1)
 def get_device_count() -> int:
+    if current_platform.is_mlu():
+        try:
+            return torch.mlu.device_count()
+        except RuntimeError:
+            return 0
+
     if (hasattr(torch, "cuda") and torch.cuda.is_available()) or is_musa():
         try:
             return torch.cuda.device_count()
@@ -2105,6 +2152,12 @@ def get_device_count() -> int:
             if torch.hpu.is_available():
                 return torch.hpu.device_count()
         except (ImportError, RuntimeError):
+            return 0
+
+    if is_mlu():
+        try:
+            return torch.mlu.device_count()
+        except RuntimeError:
             return 0
 
     return 0  # No accelerators available
