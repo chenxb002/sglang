@@ -1,6 +1,7 @@
 # Internal 模块部署说明
 
 `internal` 部署在公司内网，负责从 VPS 拉取任务、触发 Jenkins、轮询 Jenkins build 结果，并将结果写回 VPS task DB。
+master 在 Jenkins build 运行期间会增量同步 console log 到 VPS，供 GitHub Actions 下载完整 Jenkins 日志 artifact。
 
 ## 组件
 

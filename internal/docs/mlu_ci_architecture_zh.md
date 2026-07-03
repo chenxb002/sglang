@@ -278,8 +278,9 @@ vps/slave.py
 - 接收 `master.py` 的状态更新。
 - 提供 active task 查询接口给 `master.py`。
 - 提供任务状态查询接口给 `bridge.py`。
+- 保存由 `master.py` 同步过来的 Jenkins 完整运行日志文件，并提供日志下载接口给 `bridge.py`。
 
-任务状态保存在 JSON DB 中，由 `vps/external_ci.conf` 中的 `db_path` 指定。
+任务状态保存在 JSON DB 中，由 `vps/external_ci.conf` 中的 `db_path` 指定。完整 Jenkins 日志不建议写入 JSON DB，而应按 task id 保存为独立文本文件，例如 `<log_dir>/<task_id>.log`。
 
 常见状态包括：
 
@@ -310,7 +311,8 @@ internal/master.py
 - 获取待处理任务。
 - 使用 Jenkins API 触发 Jenkins job。
 - 轮询 Jenkins build 结果。
-- 将 Jenkins build id 和最终状态写回 `slave.py`。
+- 通过 Jenkins progressive log API 增量拉取运行日志，并写回 `slave.py`。
+- 将 Jenkins build id、运行中日志摘要和最终状态写回 `slave.py`。
 
 `master.py` 是整个中间 runner 中唯一和 Jenkins 通信的组件。
 
@@ -321,6 +323,7 @@ GET  /crumbIssuer/api/json
 POST /job/.../buildWithParameters
 GET  /queue/item/<id>/api/json
 GET  /job/.../<build_id>/api/json
+GET  /job/.../<build_id>/logText/progressiveText?start=<offset>
 GET  /job/.../api/json
 ```
 
@@ -467,13 +470,15 @@ checkout 优先级：
 
 测试选择逻辑：
 
-```text
-trigger_type=ci
-  -> test/run_suite.py --hw mlu --suite stage-a-test-1-mlu
+| `trigger_type` | 来源/场景 | Jenkins 行为 | 说明 |
+| --- | --- | --- | --- |
+| `ci` | PR、push、手动触发的默认值 | 依次运行 `pr-test-1-mlu`、`pr-test-2-mlu` 两个 Jenkins stage；每个 stage 调用同名 suite | 标准快速 CI，按测试文件所需 MLU 卡数拆分，失败即失败 |
+| `pr` | 兼容 PR 触发命名 | 同 `ci` | 语义上表示 pull request 检查 |
+| `pull_request` | 兼容 GitHub event 名称 | 同 `ci` | 语义上表示 pull request 检查 |
+| `push` | 兼容 push 触发命名 | 同 `ci` | 语义上表示分支 push 检查 |
+| `nightly` | nightly workflow 默认值 | `test/run_suite.py --hw mlu --suite nightly-test-mlu --nightly --continue-on-error` | 夜间测试，仍保持一个 stage，stage 名和 suite 名一致 |
 
-trigger_type=nightly
-  -> test/run_suite.py --hw mlu --suite nightly-1-mlu --nightly --continue-on-error
-```
+当前 `bridge.py` 只要求 `trigger_type` 非空，并不在入口处做枚举校验；实际支持范围由 Jenkins pipeline 的触发类型白名单决定。不在上表中的值会在 Jenkins 阶段失败并提示 `Unsupported SGLang MLU trigger_type`。
 
 ### 6.6 master 回写最终状态
 
@@ -493,7 +498,166 @@ Jenkins build 结束后，master 查询 Jenkins 结果并映射成 CI 状态。
 
 master 将最终状态写回 slave 后，GitHub Actions 轮询即可看到终态。
 
-### 6.7 GitHub Actions 获取结果
+### 6.7 Jenkins 完整日志同步设计
+
+为了让 bridge 端和 GitHub Actions 端获取完整 Jenkins 运行日志，日志回传应独立于任务状态查询实现。状态查询保持轻量，完整日志通过单独接口下载。
+
+推荐链路如下：
+
+```text
+Jenkins progressiveText
+  <- internal/master.py 增量拉取
+  -> vps/slave.py 按 task_id 追加保存完整日志文件
+  <- vps/bridge.py 代理 get_log 请求
+  <- GitHub Actions 下载日志文件并上传 artifact
+```
+
+#### 6.7.1 master 增量拉取 Jenkins 日志
+
+`master.py` 在 Jenkins build 已启动后，除查询 build 状态外，还应周期性调用 Jenkins progressive log API：
+
+```text
+GET /job/.../<build_id>/logText/progressiveText?start=<offset>
+```
+
+该接口返回从 `offset` 开始的新日志内容，并通过响应头提供下一次读取位置：
+
+```text
+X-Text-Size: <next_offset>
+X-More-Data: true|false
+```
+
+`master.py` 需要通过 slave 的 `append_log` 路径把 `<next_offset>` 写回任务元数据，下一轮从该位置继续读取。这样可以避免每次下载完整 console log。
+
+#### 6.7.2 slave 保存完整日志
+
+`slave.py` 建议为每个任务维护独立日志文件：
+
+```text
+<data_dir>/logs/<task_id>.log
+```
+
+`master.py` 每次拉到 Jenkins 新日志后，分两步写回 slave：
+
+1. 使用 `text/plain` 追加完整日志增量，不把大日志塞进 JSON body：
+
+```text
+POST /?source=master&aiming=append_log&id=<task_id>&log_start_offset=<offset>&log_offset=<next_offset>
+Content-Type: text/plain; charset=utf-8
+
+<本轮新增 Jenkins 日志>
+```
+
+2. 使用 JSON 更新轻量状态元数据：
+
+```json
+{
+  "source": "master",
+  "id": "<task_id>",
+  "status": "working",
+  "inner_id": "<jenkins_build_id>",
+  "log_status": "syncing",
+  "log_error": ""
+}
+```
+
+其中：
+
+- `text/plain` 请求体：追加写入 `<task_id>.log`，用于保存完整 Jenkins 日志。
+- `log_start_offset` / `log_offset`：用于记录 Jenkins progressive log 的读取游标，并让日志追加请求具备幂等性；`log_offset` 只由 `append_log` 路径更新，不通过状态更新 JSON 单独推进。
+- `log`：由 `slave.py` 根据追加的日志增量维护最近 N 行摘要，并在 `get_status` 中返回；终态时 `master.py` 可以通过 JSON 写入一条很短的结果说明。
+- `log_status` / `log_error`：独立表示日志同步状态，不参与 CI 终态判定。推荐值为 `pending`、`syncing`、`complete`、`failed`。
+
+CI 状态与日志同步状态应解耦：`post_log_chunk` 失败时，master 记录 `log_status=failed` 和 `log_error`，但仍应通过 JSON 状态更新把 Jenkins 最终结果回传给 slave，避免大日志传输失败导致 GitHub Actions 一直拿不到 CI 结果。
+
+不建议把完整日志或大段日志增量直接写入 JSON DB 的 `log` 字段，也不建议通过 JSON body 传输完整日志；JSON 只保留 CI 状态、日志同步状态和短结果说明。
+
+#### 6.7.3 bridge 日志下载接口
+
+`bridge.py` 保持不访问 Jenkins，只代理 slave 的日志接口。建议新增：
+
+```text
+GET http://<bridge-host>:14547/aiming=get_log&id=<task_id>
+```
+
+返回完整日志，Content-Type 使用 `text/plain; charset=utf-8`。
+
+可选支持 tail 查询，便于失败时在 GitHub Actions 页面打印最近日志：
+
+```text
+GET http://<bridge-host>:14547/aiming=get_log&id=<task_id>&tail=300
+```
+
+`tail=300` 表示只返回最后 300 行。
+
+#### 6.7.4 GitHub Actions 日志处理策略
+
+当前不增加调试开关，GitHub Actions 侧按结果固定处理：
+
+| 场景 | Actions 页面打印 | Artifact 上传 |
+| --- | --- | --- |
+| 成功 | 不打印完整日志，只打印状态摘要 | 上传完整 Jenkins 日志 |
+| 失败或 unstable/error | 打印最近 N 行日志 | 上传完整 Jenkins 日志 |
+
+推荐流程：
+
+```text
+1. 轮询 get_status，直到任务进入终态。
+2. 调用 get_log 下载完整日志到本地文件；下载失败时重试 3 次。
+3. 如果 `log_status=failed`，在 Actions 页面打印 `log_error`，并把已下载日志视为可能不完整。
+4. 如果终态不是 success，调用 get_log&tail=N 或本地 tail 打印最近 N 行。
+5. 使用 actions/upload-artifact 上传完整日志文件。
+6. 如果完整日志下载成功，调用 end_job 清理任务；如果重试后仍下载失败，不调用 end_job，让远端任务和日志保留到 retention 自动清理。
+```
+
+示例 GitHub Actions 片段：
+
+```yaml
+- name: Download MLU Jenkins log
+  if: always() && steps.mlu_ci.outputs.task_id != ''
+  shell: bash
+  run: |
+    set -euo pipefail
+    TASK_ID="${{ steps.mlu_ci.outputs.task_id }}"
+    mkdir -p mlu-ci-logs
+    curl -fsS "http://127.0.0.1:14547/aiming=get_log&id=${TASK_ID}" \
+      -o "mlu-ci-logs/jenkins-${TASK_ID}.log"
+
+- name: Print Jenkins log tail on failure
+  if: failure() && steps.mlu_ci.outputs.task_id != ''
+  shell: bash
+  run: |
+    TASK_ID="${{ steps.mlu_ci.outputs.task_id }}"
+    echo "::group::Last Jenkins log lines"
+    curl -fsS "http://127.0.0.1:14547/aiming=get_log&id=${TASK_ID}&tail=300" || true
+    echo "::endgroup::"
+
+- name: Upload MLU Jenkins log
+  if: always() && steps.mlu_ci.outputs.task_id != ''
+  uses: actions/upload-artifact@v4
+  with:
+    name: mlu-jenkins-log-${{ steps.mlu_ci.outputs.task_id }}
+    path: mlu-ci-logs/
+    if-no-files-found: warn
+```
+
+如果 `run_mlu_ci.py` 负责下载日志，也可以由脚本直接生成 `mlu-ci-logs/jenkins-<task_id>.log`，workflow 只保留 `actions/upload-artifact` 步骤。
+
+#### 6.7.5 日志安全和保留策略
+
+完整 Jenkins 日志可能包含内部路径、镜像地址、环境变量或 token。写回 slave 前建议在 `master.py` 做基础脱敏，例如过滤：
+
+```text
+token=...
+password=...
+Authorization: ...
+SGLANG_JENKINS_TOKEN
+GITHUB_TOKEN
+```
+
+日志文件应跟随任务生命周期清理。建议与终态任务保留时间一致，或单独配置 `log_retention_seconds`。
+
+### 6.8 GitHub Actions 获取结果
 
 `run_mlu_ci.py` 周期性查询：
 
@@ -510,13 +674,13 @@ error
 unstable
 ```
 
-GitHub Actions 会打印日志并调用：
+GitHub Actions 会下载完整 Jenkins 日志并上传 artifact；如果任务失败，则额外打印最近 N 行日志。随后调用：
 
 ```text
 GET http://<bridge-host>:14547/aiming=end_job&id=<task_id>
 ```
 
-如果状态包含 `success`，GitHub Actions 返回成功；否则返回失败。
+如果状态包含 `success`，GitHub Actions 返回成功；否则返回失败。完整日志 artifact 无论成功失败都保留，便于后续排查。
 
 ## 7. 部署方式
 
@@ -693,7 +857,7 @@ GitHub Actions -> master.py
 
 - 只允许指定 `repo`。
 - 只允许指定 `repo_url` 白名单。
-- 只允许指定 `trigger_type`。
+- 只允许指定白名单内的 `trigger_type`，当前建议为 `ci`、`pr`、`pull_request`、`push`、`nightly`。
 - 不允许外部随意传递 Jenkins 敏感参数。
 
 ### 9.4 Jenkins 执行环境隔离

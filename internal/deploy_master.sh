@@ -74,6 +74,8 @@ SGLang MLU CI — 内网 Master 自动部署脚本
 示例:
   export SGLANG_JENKINS_USER='<jenkins-user>'
   export SGLANG_JENKINS_TOKEN='<jenkins-api-token>'
+  export SGLANG_JENKINS_USER='chenxiaobing'
+  export SGLANG_JENKINS_TOKEN='11efbb32890482bfceff033125e7934d2a'
   ./deploy_master.sh --status
   ./deploy_master.sh --restart
 EOF

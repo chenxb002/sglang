@@ -27,6 +27,20 @@ git_ref
 commit_sha
 ```
 
+## trigger_type
+
+Jenkins pipeline 根据 `trigger_type` 选择测试套件：
+
+| `trigger_type` | 测试套件 | 作用 |
+| --- | --- | --- |
+| `ci` | `pr-test-1-mlu`、`pr-test-2-mlu` | PR、push、手动触发的默认快速 CI，按测试所需 MLU 卡数拆分 stage |
+| `pr` | `pr-test-1-mlu`、`pr-test-2-mlu` | 兼容 PR 触发命名 |
+| `pull_request` | `pr-test-1-mlu`、`pr-test-2-mlu` | 兼容 GitHub pull_request event 名称 |
+| `push` | `pr-test-1-mlu`、`pr-test-2-mlu` | 兼容 push 触发命名 |
+| `nightly` | `nightly-test-mlu --nightly --continue-on-error` | 夜间测试，仍保持一个 stage，stage 名和 suite 名一致 |
+
+不在上表中的值会被 Jenkins pipeline 拒绝，并返回 `Unsupported SGLang MLU trigger_type`。
+
 ## 镜像
 
 SGLang MLU CI 使用的测试镜像：
@@ -52,3 +66,4 @@ Jenkins pipeline 负责：
 - 安装 SGLang MLU 依赖。
 - 执行 MLU 测试脚本。
 - 将 Jenkins build result 暴露给 master 轮询。
+- Jenkins console log 由内网 master 通过 Jenkins API 增量同步到 VPS，pipeline 无需额外回调外网服务。

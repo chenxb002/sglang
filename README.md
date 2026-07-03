@@ -1,6 +1,10 @@
 # SGLang MLU CI/CD Scripts
 
-该仓库分支单独存放 SGLang MLU 后端 CI/CD 的部署脚本。当前方案按部署边界拆成三个模块目录：
+该仓库存放 SGLang MLU 后端 CI/CD 的完整部署方案：VPS 外网网关、内网 Jenkins 调度器、Jenkins Pipeline。
+
+> **架构文档**：[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 模块交互、消息流、API 定义、安全边界。
+
+当前方案按部署边界拆成三个模块目录：
 
 ```text
 ./

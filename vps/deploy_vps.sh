@@ -31,8 +31,8 @@ RUNNER_NAME="${RUNNER_NAME:-cambricon-runner-$(hostname -s 2>/dev/null || echo v
 USER_HOME="${HOME}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_DIR="${SGLANG_CI_VPS_SOURCE_DIR:-${SCRIPT_DIR}}"
-DEPLOY_DIR="${SGLANG_CI_DEPLOY_DIR:-${USER_HOME}/sglang-ci-deploy}"
-DATA_DIR="${SGLANG_CI_DATA_DIR:-${USER_HOME}/sglang-ci-data}"
+DEPLOY_DIR="${SGLANG_CI_DEPLOY_DIR:-${USER_HOME}/data/mlu_ci/deploy}"
+DATA_DIR="${SGLANG_CI_DATA_DIR:-${USER_HOME}/data/mlu_ci}"
 RUNNER_DIR="${GITHUB_RUNNER_DIR:-${USER_HOME}/actions-runner}"
 LOG_DIR="${DEPLOY_DIR}/logs"
 
@@ -197,6 +197,7 @@ host="127.0.0.1"
 bind_host="0.0.0.0"
 port="${SLAVE_PORT}"
 db_path="${DATA_DIR}/sglang_tasks.json"
+log_dir="${DATA_DIR}/logs"
 
 terminal_retention_seconds="86400"
 active_task_timeout_seconds="172800"
