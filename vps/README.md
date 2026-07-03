@@ -63,6 +63,7 @@ cambricon
 - `SGLANG_CI_VPS_SOURCE_DIR`：bridge/slave 源文件目录，默认是 `deploy_vps.sh` 所在目录。
 - `SGLANG_CI_DEPLOY_DIR`：bridge/slave 部署目录，默认 `~/sglang-ci-deploy`。
 - `SGLANG_CI_DATA_DIR`：任务 DB 目录，默认 `~/sglang-ci-data`。
+- Jenkins 完整运行日志按 task id 保存在任务 DB 目录下的 `logs/` 子目录。
 - `GITHUB_RUNNER_DIR`：GitHub runner 安装目录，默认 `~/actions-runner`。
 
 ## 常用命令
@@ -105,6 +106,29 @@ tail -f ~/actions-runner/runner.log
 
 ```bash
 curl -s "http://127.0.0.1:14548/source=master&aiming=get_data" | python3 -m json.tool
+```
+
+通过 bridge 查询任务状态：
+
+```bash
+TASK_ID='<task-id>'
+curl -s "http://127.0.0.1:14547/aiming=get_status&id=${TASK_ID}" | python3 -m json.tool
+```
+
+其中 `status` 表示 CI 状态，`log_status` 表示完整 Jenkins 日志同步状态；`log_status=failed` 时可查看 `log_error` 判断日志 artifact 是否可能不完整。
+
+下载完整 Jenkins 日志：
+
+```bash
+TASK_ID='<task-id>'
+curl -s "http://127.0.0.1:14547/aiming=get_log&id=${TASK_ID}" -o "jenkins-${TASK_ID}.log"
+```
+
+只查看最后 300 行 Jenkins 日志：
+
+```bash
+TASK_ID='<task-id>'
+curl -s "http://127.0.0.1:14547/aiming=get_log&id=${TASK_ID}&tail=300"
 ```
 
 清理某个任务：

@@ -197,6 +197,7 @@ host="127.0.0.1"
 bind_host="0.0.0.0"
 port="${SLAVE_PORT}"
 db_path="${DATA_DIR}/sglang_tasks.json"
+log_dir="${DATA_DIR}/logs"
 
 terminal_retention_seconds="86400"
 active_task_timeout_seconds="172800"

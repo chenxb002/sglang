@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -33,6 +34,18 @@ FIELD_MAP = {
 }
 
 TERMINAL_JENKINS_RESULTS = {"SUCCESS", "FAILURE", "UNSTABLE", "ABORTED"}
+LOG_TAIL_LINES = 200
+LOG_DRAIN_MAX_CHUNKS = 100
+LOG_STATUS_SYNCING = "syncing"
+LOG_STATUS_COMPLETE = "complete"
+LOG_STATUS_FAILED = "failed"
+
+SECRET_PATTERNS = [
+    (re.compile(r"(?i)(authorization:\s*)\S+"), r"\1***"),
+    (re.compile(r"(?i)(token\s*[=:]\s*)\S+"), r"\1***"),
+    (re.compile(r"(?i)(password\s*[=:]\s*)\S+"), r"\1***"),
+    (re.compile(r"(?i)(secret\s*[=:]\s*)\S+"), r"\1***"),
+]
 
 
 class JenkinsClient:
@@ -116,6 +129,17 @@ class JenkinsClient:
         response.raise_for_status()
         return response.json(), response.text
 
+    def progressive_log(self, build_id: str, start: int) -> tuple[str, int, bool]:
+        response = self.session.get(
+            urljoin(self.base_url, f"{build_id}/logText/progressiveText?start={start}"),
+            auth=self.auth,
+            timeout=60,
+        )
+        response.raise_for_status()
+        next_start = int(response.headers.get("X-Text-Size", start))
+        has_more = response.headers.get("X-More-Data", "false").lower() == "true"
+        return response.text, next_start, has_more
+
     def find_build_id_by_task_id(self, task_id: str) -> Optional[str]:
         for build in self.builds():
             build_url = build.get("url")
@@ -129,14 +153,27 @@ class JenkinsClient:
         return None
 
 
-def post_update(slave_url: str, task_id: str, status: str, log: str, inner_id: str = "") -> None:
+def post_update(
+    slave_url: str,
+    task_id: str,
+    status: str,
+    log: Optional[str] = None,
+    inner_id: str = "",
+    log_status: Optional[str] = None,
+    log_error: Optional[str] = None,
+) -> None:
     payload = {
         "source": "master",
         "id": task_id,
         "status": status,
-        "log": log,
         "inner_id": inner_id,
     }
+    if log is not None:
+        payload["log"] = log
+    if log_status is not None:
+        payload["log_status"] = log_status
+    if log_error is not None:
+        payload["log_error"] = log_error
     for _ in range(10):
         try:
             response = requests.post(slave_url, json=payload, timeout=30)
@@ -149,8 +186,149 @@ def post_update(slave_url: str, task_id: str, status: str, log: str, inner_id: s
     raise RuntimeError(f"failed to update slave task {task_id} -> {status}")
 
 
+def post_log_chunk(
+    slave_url: str,
+    task_id: str,
+    chunk: str,
+    start_offset: int,
+    next_offset: int,
+) -> None:
+    params = {
+        "source": "master",
+        "aiming": "append_log",
+        "id": task_id,
+        "log_start_offset": str(start_offset),
+        "log_offset": str(next_offset),
+    }
+    for _ in range(10):
+        try:
+            response = requests.post(
+                slave_url,
+                params=params,
+                data=chunk.encode("utf-8"),
+                headers={"Content-Type": "text/plain; charset=utf-8"},
+                timeout=60,
+            )
+            if response.status_code == 200:
+                return
+            print(f"[master] slave log append returned {response.status_code}: {response.text}")
+        except Exception as exc:
+            print(f"[master] slave log append failed: {exc}")
+        time.sleep(3)
+    raise RuntimeError(f"failed to append Jenkins log for slave task {task_id}")
+
+
+def redact_log(text: str) -> str:
+    for pattern, replacement in SECRET_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
+def tail_lines(text: str, max_lines: int = LOG_TAIL_LINES) -> str:
+    lines = text.splitlines()
+    if len(lines) <= max_lines:
+        return text
+    return "\n".join(lines[-max_lines:])
+
+
+def log_offset(task: Dict[str, str]) -> int:
+    try:
+        return int(task.get("log_offset", "0") or "0")
+    except ValueError:
+        return 0
+
+
+def short_error(exc: Exception) -> str:
+    return str(exc).replace("\n", " ")[:500]
+
+
+def sync_jenkins_log(
+    slave_url: str,
+    task: Dict[str, str],
+    jenkins: JenkinsClient,
+    inner_id: str,
+) -> tuple[str, str, str]:
+    task_id = task["id"]
+    offset = log_offset(task)
+    current_log = str(task.get("log", ""))
+    try:
+        chunk, next_offset, _ = jenkins.progressive_log(inner_id, offset)
+    except Exception as exc:
+        error = short_error(exc)
+        print(f"[master] failed to fetch Jenkins log for build {inner_id}: {error}")
+        return current_log, LOG_STATUS_FAILED, error
+
+    if not chunk and next_offset == offset:
+        return current_log, LOG_STATUS_SYNCING, ""
+
+    chunk = redact_log(chunk)
+    recent_log = tail_lines((current_log + "\n" + chunk).strip("\n"))
+    try:
+        post_log_chunk(slave_url, task_id, chunk, offset, next_offset)
+    except Exception as exc:
+        error = short_error(exc)
+        print(f"[master] failed to append Jenkins log for build {inner_id}: {error}")
+        return recent_log, LOG_STATUS_FAILED, error
+
+    task["log"] = recent_log
+    task["log_offset"] = str(next_offset)
+    return recent_log, LOG_STATUS_SYNCING, ""
+
+
+def drain_jenkins_log(
+    slave_url: str,
+    task: Dict[str, str],
+    jenkins: JenkinsClient,
+    inner_id: str,
+) -> tuple[str, str, str]:
+    """Best-effort drain of Jenkins console text before publishing terminal CI state."""
+    task_id = task["id"]
+    offset = log_offset(task)
+    current_log = str(task.get("log", ""))
+
+    for _ in range(LOG_DRAIN_MAX_CHUNKS):
+        try:
+            chunk, next_offset, has_more = jenkins.progressive_log(inner_id, offset)
+        except Exception as exc:
+            error = short_error(exc)
+            print(f"[master] failed to fetch final Jenkins log for build {inner_id}: {error}")
+            return current_log, LOG_STATUS_FAILED, error
+
+        if not chunk and next_offset == offset:
+            if has_more:
+                error = f"Jenkins log drain made no offset progress at {offset}"
+                print(f"[master] {error}, build={inner_id}")
+                return current_log, LOG_STATUS_FAILED, error
+            return current_log, LOG_STATUS_COMPLETE, ""
+
+        chunk = redact_log(chunk)
+        recent_log = tail_lines((current_log + "\n" + chunk).strip("\n"))
+        try:
+            post_log_chunk(slave_url, task_id, chunk, offset, next_offset)
+        except Exception as exc:
+            error = short_error(exc)
+            print(f"[master] failed to append final Jenkins log for build {inner_id}: {error}")
+            return recent_log, LOG_STATUS_FAILED, error
+
+        current_log = recent_log
+        task["log"] = recent_log
+        task["log_offset"] = str(next_offset)
+        offset = next_offset
+        if not has_more:
+            return current_log, LOG_STATUS_COMPLETE, ""
+
+    error = f"Jenkins log drain exceeded {LOG_DRAIN_MAX_CHUNKS} chunks at offset {offset}"
+    print(f"[master] {error}, build={inner_id}")
+    return current_log, LOG_STATUS_FAILED, error
+
+
 def classify_failure(response_text: str) -> tuple[str, str]:
-    if "stage4" in response_text or "mlu_ci_task" in response_text:
+    if (
+        "pr-test-" in response_text
+        or "nightly-test-mlu" in response_text
+        or "stage4" in response_text
+        or "mlu_ci_task" in response_text
+    ):
         return (
             "test_fail",
             "SGLang MLU Jenkins job failed during test. Check the archived logs and Jenkins build details.",
@@ -222,22 +400,73 @@ def process_once(slave_url: str, jenkins: JenkinsClient, jenkins_params: list[st
         info, text = jenkins.build_info(inner_id)
         result = info.get("result")
         if info.get("building"):
+            _recent_log, log_status, log_error = sync_jenkins_log(slave_url, task, jenkins, inner_id)
+            post_update(
+                slave_url,
+                task_id,
+                "working",
+                inner_id=inner_id,
+                log_status=log_status,
+                log_error=log_error,
+            )
             print(f"[master] Jenkins build {inner_id} still running, result={result}")
             continue
         if result not in TERMINAL_JENKINS_RESULTS:
+            _recent_log, log_status, log_error = sync_jenkins_log(slave_url, task, jenkins, inner_id)
+            post_update(
+                slave_url,
+                task_id,
+                "working",
+                inner_id=inner_id,
+                log_status=log_status,
+                log_error=log_error,
+            )
             print(f"[master] Jenkins build {inner_id} still running, result={result}")
             continue
 
+        recent_log, log_status, log_error = drain_jenkins_log(slave_url, task, jenkins, inner_id)
         inner_msg = f" Jenkins build id: {inner_id}."
         if result == "SUCCESS":
-            post_update(slave_url, task_id, "success", "SGLang MLU CI passed." + inner_msg, inner_id)
+            post_update(
+                slave_url,
+                task_id,
+                "success",
+                "SGLang MLU CI passed." + inner_msg,
+                inner_id,
+                log_status=log_status,
+                log_error=log_error,
+            )
         elif result == "UNSTABLE":
-            post_update(slave_url, task_id, "unstable", "SGLang MLU CI is unstable." + inner_msg, inner_id)
+            post_update(
+                slave_url,
+                task_id,
+                "unstable",
+                "SGLang MLU CI is unstable." + inner_msg,
+                inner_id,
+                log_status=log_status,
+                log_error=log_error,
+            )
         elif result == "ABORTED":
-            post_update(slave_url, task_id, "error", "SGLang MLU CI Jenkins build was aborted." + inner_msg, inner_id)
+            post_update(
+                slave_url,
+                task_id,
+                "error",
+                "SGLang MLU CI Jenkins build was aborted." + inner_msg,
+                inner_id,
+                log_status=log_status,
+                log_error=log_error,
+            )
         else:
-            ci_status, message = classify_failure(text)
-            post_update(slave_url, task_id, ci_status, message + inner_msg, inner_id)
+            ci_status, message = classify_failure(text + "\n" + recent_log)
+            post_update(
+                slave_url,
+                task_id,
+                ci_status,
+                message + inner_msg,
+                inner_id,
+                log_status=log_status,
+                log_error=log_error,
+            )
 
 
 def main() -> int:
