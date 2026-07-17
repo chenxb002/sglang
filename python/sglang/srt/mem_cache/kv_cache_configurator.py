@@ -529,6 +529,8 @@ class KVCacheConfigurator:
         unsupported_pool_family = None
         if is_dsv4_model:
             unsupported_pool_family = "DeepSeekV4TokenToKVPool"
+        elif current_platform.is_mlu() and not self.mambaish_config:
+            unsupported_pool_family = "MLU KV pool"
         elif current_platform.is_out_of_tree() and not self.mambaish_config:
             unsupported_pool_family = "out-of-tree platform KV pool"
         elif (
@@ -722,6 +724,15 @@ class KVCacheConfigurator:
                 c4_state_dtype=sizes.c4_state_dtype,
                 c128_state_dtype=sizes.c128_state_dtype,
                 req_to_token_pool=req_to_token_pool,
+            )
+        elif current_platform.is_mlu() and not self.mambaish_config:
+            if self.use_mla_backend:
+                raise RuntimeError(
+                    "MLU backend currently supports MHA/GQA models only; "
+                    "MLA models are not supported."
+                )
+            token_to_kv_pool = self._build_oot_mha_kv_pool(
+                max_total_num_tokens=sizes.max_total_num_tokens,
             )
         elif current_platform.is_out_of_tree() and not self.mambaish_config:
             if self.use_mla_backend and is_dsa_model:
@@ -1263,7 +1274,7 @@ class KVCacheConfigurator:
         # Initialize token_to_kv_pool_allocator
         need_sort = self.server_args.disaggregation_mode in ("decode", "prefill")
         if token_to_kv_pool_allocator is None:
-            if current_platform.is_out_of_tree():
+            if current_platform.is_out_of_tree() or current_platform.is_mlu():
                 AllocatorCls = current_platform.get_paged_allocator_cls()
                 token_to_kv_pool_allocator = AllocatorCls(
                     sizes.max_total_num_tokens,

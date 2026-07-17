@@ -296,6 +296,7 @@ def capture_decode_graph(*, model_runner: ModelRunner) -> DecodeGraphCapture:
             "cpu": "CPU graph",
             "npu": "NPU graph",
             "xpu": "XPU graph",
+            "mlu": "MLU graph",
         },
     )
     role = "draft" if model_runner.is_draft_worker else "target"
@@ -313,7 +314,7 @@ def capture_decode_graph(*, model_runner: ModelRunner) -> DecodeGraphCapture:
         f"bs={capture_bs}, avail mem={before_mem:.2f} GB"
     )
 
-    if current_platform.is_out_of_tree():
+    if current_platform.is_out_of_tree() or current_platform.is_mlu():
         GraphRunnerCls = current_platform.get_graph_runner_cls()
         runner = GraphRunnerCls(model_runner)
     else:
