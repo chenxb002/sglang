@@ -100,3 +100,12 @@ register_kernel(
 )
 
 __all__ = []
+
+register_kernel(
+    KernelSpec(
+        op="speculative.tree_speculative_sampling_target_only",
+        backend=KernelBackend.TORCH,
+        target="sglang.kernels.ops.speculative.sampling_mlu:chain_speculative_sampling_target_only",
+        capabilities=frozenset({CapabilityRequirement.MLU}),
+    )
+)

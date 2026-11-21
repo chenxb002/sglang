@@ -1813,6 +1813,17 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
         sampling_params = self.sampling_params_class(**sampling_kwargs)
         sampling_params.normalize(self.tokenizer)
         sampling_params.verify(self.model_config.token_id_vocab_size)
+        if (
+            isinstance(obj, GenerateReqInput)
+            and get_device().device == "mlu"
+            and get_spec().speculative_algorithm is not None
+            and (get_spec().speculative_eagle_topk or 1) > 1
+            and sampling_params.top_k != 1
+        ):
+            raise ValueError(
+                "MLU tree speculative decoding requires greedy sampling "
+                "(temperature=0 or top_k=1)."
+            )
         _validate_watermark_request(sampling_params)
 
         # Build return object

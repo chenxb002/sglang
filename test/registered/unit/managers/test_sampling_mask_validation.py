@@ -150,6 +150,41 @@ class TestSamplingMaskValidation(CustomTestCase):
             forwarded_counts.append(tokenized_request.top_logprobs_num)
         self.assertEqual(forwarded_counts, [5, 0, 0, 7])
 
+    def test_mlu_tree_rejects_random_sampling_before_dispatch(self):
+        self.manager.model_config.token_id_vocab_size = 32
+        self.manager.preferred_sampling_params = None
+        self.manager.sampling_params_class = SamplingParams
+        self.manager.tokenizer = None
+        self.manager.fake_bootstrap_room_counter = 0
+        for device, topk, params, rejected in (
+            ("mlu", 2, {"temperature": 0.8}, True),
+            ("mlu", 2, {"temperature": 0}, False),
+            ("mlu", 4, {"temperature": 0.8, "top_k": 1}, False),
+            ("mlu", 1, {"temperature": 0.8}, False),
+            ("cpu", 2, {"temperature": 0.8}, False),
+        ):
+            with (
+                self.subTest(device=device, topk=topk, params=params),
+                get_context().override_server_args(
+                    device=device,
+                    speculative_algorithm="EAGLE3",
+                    speculative_eagle_topk=topk,
+                ),
+            ):
+                req = GenerateReqInput(input_ids=[1, 2], sampling_params=params)
+                req.normalize_batch_and_arguments()
+                self.manager.rid_to_state = {
+                    req.rid: SimpleNamespace(time_stats=APIServerReqTimeStats())
+                }
+                if rejected:
+                    with self.assertRaisesRegex(ValueError, "greedy sampling"):
+                        self.manager._create_tokenized_object(req, "", req.input_ids)
+                else:
+                    result = self.manager._create_tokenized_object(
+                        req, "", req.input_ids
+                    )
+                    self.assertEqual(list(result.input_ids), [1, 2])
+
     def test_accepts_hard_exclusion(self):
         class BoundMask(DisallowedTokensLogitsProcessor):
             def __call__(self, logits, custom_param_list=None):

@@ -38,6 +38,11 @@ class MLUMHABackend(AttentionBackend):
         # Eager DP attention also uses this value when padding requests.
         return 1
 
+    def update_verify_buffers_to_fill_after_draft(self, spec_info, cuda_graph_bs):
+        # Linear-chain metadata depends only on lengths, not draft token values.
+        if spec_info.tree_topk != 1:
+            raise NotImplementedError("MLU verify requires a topk=1 linear chain.")
+
     def init_forward_metadata(self, forward_batch: "ForwardBatch") -> None:
         if forward_batch.forward_mode.is_idle():
             return
@@ -69,7 +74,7 @@ class MLUMHABackend(AttentionBackend):
                 k.view(-1, layer.tp_k_head_num, layer.qk_head_dim),
                 v.view(-1, layer.tp_v_head_num, layer.v_head_dim),
             )
-        if forward_metadata.mixed_prefill_reqs == 0:
+        if forward_metadata.is_speculative or forward_metadata.mixed_prefill_reqs == 0:
             return self._forward_decode(
                 q, layer, forward_metadata, return_lse=return_lse
             )
@@ -199,7 +204,8 @@ class MLUMHABackend(AttentionBackend):
             k_cache_quant_scale=None,
             v_cache_quant_scale=None,
             alibi_slopes=None,
-            max_context_len=self.max_context_len,
+            # Include speculative headroom, including on draft decode steps.
+            max_context_len=forward_metadata.block_tables.shape[1] * self.page_size,
             windows_size_left=window if window is not None and window > 0 else -1,
             windows_size_right=-1,
             softmax_scale=layer.scaling,

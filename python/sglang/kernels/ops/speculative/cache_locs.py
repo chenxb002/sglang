@@ -11,6 +11,7 @@ from sglang.srt.utils import (
     is_cpu,
     is_cuda,
     is_hip,
+    is_mlu,
     is_musa,
     is_npu,
     is_xpu,
@@ -18,6 +19,7 @@ from sglang.srt.utils import (
 )
 
 _is_cpu = is_cpu()
+_is_mlu = is_mlu()
 _is_cuda = is_cuda()
 _is_hip = is_hip()
 _is_npu = is_npu()
@@ -640,7 +642,7 @@ def assign_extend_cache_locs_uniform_func(
             and swa_out.is_contiguous()
             and swa_v2p.is_contiguous()
         )
-    if _is_cuda or _is_hip or _is_musa or _is_xpu:
+    if _is_cuda or _is_hip or _is_musa or _is_xpu or _is_mlu:
         out_cache_loc = torch.empty(
             (batch_size * draft_token_num,),
             dtype=torch.int64,
@@ -708,7 +710,7 @@ def assign_extend_cache_locs_func(
             device=device,
         )
 
-    if _is_cuda or _is_hip or _is_musa or _is_xpu:
+    if _is_cuda or _is_hip or _is_musa or _is_xpu or _is_mlu:
         out_cache_loc = torch.empty(
             (batch_size * draft_token_num,),
             dtype=torch.int64,

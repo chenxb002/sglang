@@ -39,11 +39,14 @@ class ForwardMetadata:
     max_seq_len_q: int = 1
 
     # Maximum prefill KV length including cached prefixes.
-    # Set to the context limit for decode, where this field is not consumed.
+    # Decode/speculative metadata uses the request-table capacity as an upper bound.
     max_seq_len_kv: int = 0
 
     # Whether the prefill requests can read the current K/V directly.
     is_uncached_prefill: bool = False
+
+    # Speculative chains use one cached-attention row per query token.
+    is_speculative: bool = False
 
     mixed_prefill_reqs: int = -1
     mixed_prefill_tokens: int = 0
@@ -82,11 +85,46 @@ def build_forward_metadata(
 ) -> ForwardMetadata:
     """Build shared metadata for a non-idle MLU attention batch."""
     fb = forward_batch
-    tables = req_to_token[fb.req_pool_indices, :max_context_len:page_size] // page_size
+    # The final speculative round can write beyond the model context before
+    # commit trims finished requests. Decode also serves intermediate draft
+    # steps, so all three paths must retain the request pool's reserved slots.
+    table_token_limit = (
+        req_to_token.shape[1]
+        if (
+            fb.forward_mode.is_decode()
+            or fb.forward_mode.is_target_verify()
+            or fb.forward_mode.is_draft_extend_v2()
+        )
+        else max_context_len
+    )
+    tables = (
+        req_to_token[fb.req_pool_indices, :table_token_limit:page_size] // page_size
+    )
     seq_lens = fb.seq_lens.to(torch.int32)
+    if fb.forward_mode.is_target_verify() or fb.forward_mode.is_draft_extend_v2():
+        spec = fb.spec_info
+        if fb.forward_mode.is_target_verify():
+            if spec.tree_topk != 1:
+                raise NotImplementedError("MLU verify requires a topk=1 linear chain.")
+            num_tokens = spec.draft_token_num
+            prefix_lens = seq_lens
+        else:
+            num_tokens = spec.num_tokens_per_req
+            prefix_lens = seq_lens - num_tokens
+        # Each row sees the prefix and its own causal portion of the chain.
+        # This also avoids using dense flash attention for latent MLA heads.
+        context_lens = prefix_lens[:, None] + torch.arange(
+            1, num_tokens + 1, device=seq_lens.device, dtype=torch.int32
+        )
+        return metadata_cls(
+            block_tables=tables.repeat_interleave(num_tokens, dim=0),
+            seq_lens=context_lens.flatten(),
+            max_seq_len_kv=table_token_limit,
+            is_speculative=True,
+        )
     if fb.forward_mode.is_decode():
         forward_metadata = metadata_cls(
-            tables, seq_lens, max_seq_len_kv=max_context_len
+            tables, seq_lens, max_seq_len_kv=table_token_limit
         )
     elif fb.forward_mode == ForwardMode.EXTEND or fb.forward_mode.is_mixed():
         prefill_count = fb.batch_size

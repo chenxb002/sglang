@@ -4,7 +4,7 @@ A name is ``None`` where the platform has no kernel for it.
 """
 
 from sglang._lazy_import import LazyImport
-from sglang.srt.utils import is_cuda, is_hip, is_musa, is_npu, is_xpu
+from sglang.srt.utils import is_cuda, is_hip, is_mlu, is_musa, is_npu, is_xpu
 
 if is_cuda():
     # Resolved on first call: CUDA builds without FlashInfer must still import
@@ -17,6 +17,11 @@ elif is_hip():
     )
     from sglang.kernels.ops.sampling.renorm_triton import (
         top_p_renorm_probs_triton as top_p_renorm_prob,
+    )
+elif is_mlu():
+    from sglang.kernels.ops.sampling.renorm_mlu import (
+        top_k_renorm_prob,
+        top_p_renorm_prob,
     )
 elif is_npu():
     try:

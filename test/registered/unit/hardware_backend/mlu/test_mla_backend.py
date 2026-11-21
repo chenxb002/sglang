@@ -4,8 +4,10 @@ import unittest
 from contextlib import ExitStack
 from functools import partial
 from types import SimpleNamespace as NS
+from unittest.mock import patch
 
 import torch
+import torch_mlu_ops
 
 from sglang.srt.hardware_backend.mlu.attention.mla_backend import MLUMLABackend
 from sglang.srt.hardware_backend.mlu.memory_pool import MLUMLATokenToKVPool
@@ -96,6 +98,12 @@ class TestMLUMLABackend(CustomTestCase):
             mha_one_shot=None,
             mha_return_lse=None,
         )
+        forward_batch.spec_info = NS(
+            tree_topk=1, draft_token_num=query_lens[0], num_tokens_per_req=query_lens[0]
+        )
+        if mode.is_target_verify():
+            forward_batch.seq_lens -= query_lens[0]
+            forward_batch.seq_lens_cpu -= query_lens[0]
         backend.init_forward_metadata(forward_batch)
         return NS(
             pool=pool,
@@ -161,6 +169,47 @@ class TestMLUMLABackend(CustomTestCase):
             )
         return torch.cat(outputs), torch.cat(lses)
 
+    def test_speculative_context_headroom(self):
+        for mode, query_lens in (
+            (ForwardMode.TARGET_VERIFY, [8, 8]),
+            (ForwardMode.DRAFT_EXTEND_V2, [8, 8]),
+            (ForwardMode.DECODE, [1, 1]),
+        ):
+            with self.subTest(mode=mode):
+                fixture = self._create_latent_fixture(query_lens, [21, 35], mode)
+                fixture.backend.max_context_len = 32
+                fixture.backend.init_forward_metadata(fixture.forward_batch)
+                expected, expected_lse = self._reference(
+                    fixture.q,
+                    fixture.cache,
+                    fixture.cache[..., :512],
+                    query_lens,
+                    [21, 35],
+                    fixture.layer.scaling,
+                )
+                with patch.object(
+                    torch_mlu_ops,
+                    "single_query_cached_kv_attn",
+                    wraps=torch_mlu_ops.single_query_cached_kv_attn,
+                ) as attention:
+                    actual, lse = fixture.backend.forward(
+                        fixture.q,
+                        fixture.current,
+                        None,
+                        fixture.layer,
+                        fixture.forward_batch,
+                        return_lse=True,
+                    )
+                kwargs = attention.call_args.kwargs
+                self.assertGreaterEqual(kwargs["block_tables"].shape[1] * 16, 35)
+                self.assertGreaterEqual(kwargs["max_context_len"], 35)
+                torch.testing.assert_close(
+                    actual.cpu().float(), expected.flatten(1), atol=3e-2, rtol=3e-2
+                )
+                torch.testing.assert_close(
+                    lse.cpu(), expected_lse, atol=1e-3, rtol=1e-3
+                )
+
     def test_latent_prefill_decode_mixed(self):
         for mode, query_lens, kv_lens, mixed_prefill_reqs in (
             # No cached prefixes.
@@ -168,6 +217,8 @@ class TestMLUMLABackend(CustomTestCase):
             # Both requests have cached prefixes.
             (ForwardMode.EXTEND, [3, 5], [21, 35], None),
             # One decode token per request.
+            (ForwardMode.TARGET_VERIFY, [4, 4], [21, 35], None),
+            (ForwardMode.DRAFT_EXTEND_V2, [4, 4], [21, 35], None),
             (ForwardMode.DECODE, [1, 1], [21, 35], None),
             # Cached-prefix prefill plus decode.
             (ForwardMode.MIXED, [3, 1], [21, 35], 1),

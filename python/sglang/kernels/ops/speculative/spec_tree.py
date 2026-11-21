@@ -19,7 +19,7 @@ import triton.language as tl
 
 from sglang.srt.platforms import current_platform
 from sglang.srt.platforms.interface import reject_out_of_tree_path
-from sglang.srt.utils import is_cpu, is_cuda, is_hip, is_musa, is_npu, is_xpu
+from sglang.srt.utils import is_cpu, is_cuda, is_hip, is_mlu, is_musa, is_npu, is_xpu
 
 _is_cuda = is_cuda()
 _is_hip = is_hip()
@@ -27,6 +27,7 @@ _is_musa = is_musa()
 _is_npu = is_npu()
 _is_xpu = is_xpu()
 _is_cpu = is_cpu()
+_is_mlu = is_mlu()
 
 if _is_cuda or _is_hip:
     from sglang.kernels.ops.speculative.tree import (
@@ -395,7 +396,7 @@ def build_tree_kernel_efficient_func(
             num_verify_tokens,
             tree_mask_mode,
         )
-    elif _is_xpu:
+    elif _is_xpu or _is_mlu:
         sgl_build_tree_kernel_triton(
             parent_list,
             top_scores_index,
@@ -535,7 +536,7 @@ def verify_tree_greedy_func(
             retrive_next_sibling=retrieve_next_sibling,
             target_predict=target_predict,
         )
-    elif _is_xpu:
+    elif _is_xpu or _is_mlu:
         verify_tree_greedy_triton(
             predicts=predicts,
             accept_index=accept_index,
@@ -550,4 +551,8 @@ def verify_tree_greedy_func(
         reject_out_of_tree_path(
             current_platform, subsystem="EAGLE greedy tree verification"
         )
+    if _is_mlu:
+        # MLU predicated stores can leave rejected nodes untouched.
+        columns = torch.arange(accept_index.shape[1], device=accept_index.device)
+        accept_index.masked_fill_(columns[None, :] > accept_token_num[:, None], -1)
     return predicts, accept_index, accept_token_num

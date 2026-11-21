@@ -45,6 +45,7 @@ from sglang.srt.utils import (
     is_cpu,
     is_cuda,
     is_hip,
+    is_mlu,
     is_xpu,
 )
 from sglang.srt.utils.async_probe import maybe_detect_nan, maybe_detect_oob
@@ -851,6 +852,12 @@ def eagle_sample(
     candidates = verify_input.draft_token.reshape(bs, verify_input.draft_token_num)
     predict_shape = list(next_token_logits.shape)[:-1]
     use_rejection_sampling = get_spec().speculative_use_rejection_sampling
+    if is_mlu() and verify_input.tree_topk > 1 and not sampling_info.is_all_greedy:
+        raise ValueError(
+            "MLU tree speculative decoding currently requires temperature=0; "
+            "random tree verification is not supported."
+        )
+
     greedy = _verify_uses_greedy(
         is_all_greedy=sampling_info.is_all_greedy,
         is_cpu=_is_cpu,

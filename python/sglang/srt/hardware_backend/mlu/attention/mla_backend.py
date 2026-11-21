@@ -110,6 +110,11 @@ class MLUMLABackend(AttentionBackend):
         # Eager DP attention also uses this value when padding requests.
         return 1
 
+    def update_verify_buffers_to_fill_after_draft(self, spec_info, cuda_graph_bs):
+        # Linear-chain metadata depends only on lengths, not draft token values.
+        if spec_info.tree_topk != 1:
+            raise NotImplementedError("MLU verify requires a topk=1 linear chain.")
+
     def init_forward_metadata(self, forward_batch: "ForwardBatch") -> None:
         if forward_batch.forward_mode.is_idle():
             return
@@ -120,7 +125,10 @@ class MLUMLABackend(AttentionBackend):
             self.max_context_len,
             metadata_cls=MLAForwardMetadata,
         )
-        if forward_batch.forward_mode.is_decode():
+        if (
+            forward_batch.forward_mode.is_decode()
+            or self.forward_metadata.is_speculative
+        ):
             return
         forward_metadata = self.forward_metadata
         if forward_metadata.is_uncached_prefill:
@@ -194,7 +202,7 @@ class MLUMLABackend(AttentionBackend):
         q = q.reshape(-1, layer.tp_q_head_num, layer.qk_head_dim)
         forward_metadata = self.forward_metadata
         num_prefill_reqs = forward_metadata.mixed_prefill_reqs
-        if num_prefill_reqs == 0:
+        if forward_metadata.is_speculative or num_prefill_reqs == 0:
             return self._forward_mla_decode(q, layer, return_lse=return_lse)
         num_prefill_tokens = (
             forward_metadata.mixed_prefill_tokens
@@ -290,7 +298,8 @@ class MLUMLABackend(AttentionBackend):
             k_cache_quant_scale=None,
             v_cache_quant_scale=None,
             alibi_slopes=None,
-            max_context_len=self.max_context_len,
+            # Include speculative headroom, including on draft decode steps.
+            max_context_len=forward_metadata.block_tables.shape[1] * self.page_size,
             windows_size_left=-1,
             windows_size_right=-1,
             softmax_scale=layer.scaling,

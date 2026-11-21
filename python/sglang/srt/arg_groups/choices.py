@@ -167,6 +167,7 @@ DRAFT_ATTENTION_BACKEND_CHOICES = [
     "ascend",
     "trtllm_mha",
     "intel_xpu",
+    "mlu",
 ]
 
 DFLASH_MLA_ONLY_DRAFT_BACKENDS = ("cutedsl_mla", "trtllm_mla")
