@@ -86,11 +86,27 @@ class TestMLUTritonTreeDecode(TestMLUSpecDecode):
     speculative_topk = 2
     num_draft_tokens = 7
 
-    def test_sampled_verify(self):
-        with self.assertRaisesRegex(ValueError, "greedy sampling"):
-            self._generate({"temperature": 0.8, "top_k": 20, "top_p": 0.9})
-        # Rejection happens before dispatch; the same engine remains usable.
-        self._generate({"temperature": 0})
+    def test_mixed_sampling_and_cache_reuse(self):
+        prompts = ["The capital of France is", "Count from one to ten:"]
+        params = [
+            {"temperature": 0, "max_new_tokens": 17, "ignore_eos": True},
+            {
+                "temperature": 0.8,
+                "top_k": 20,
+                "top_p": 0.9,
+                "max_new_tokens": 29,
+                "ignore_eos": True,
+            },
+        ]
+        greedy = self.engine.generate(prompts[0], sampling_params=params[0])
+        for _ in range(2):
+            outputs = self.engine.generate(prompts, sampling_params=params)
+            self.assertEqual(outputs[0]["text"], greedy["text"])
+            self.assertEqual(
+                [o["meta_info"]["completion_tokens"] for o in outputs], [17, 29]
+            )
+            for output in outputs:
+                self.assertGreater(output["meta_info"]["spec_verify_ct"], 0)
 
 
 class TestMLUMLAMTP(CustomTestCase):

@@ -852,12 +852,6 @@ def eagle_sample(
     candidates = verify_input.draft_token.reshape(bs, verify_input.draft_token_num)
     predict_shape = list(next_token_logits.shape)[:-1]
     use_rejection_sampling = get_spec().speculative_use_rejection_sampling
-    if is_mlu() and verify_input.tree_topk > 1 and not sampling_info.is_all_greedy:
-        raise ValueError(
-            "MLU tree speculative decoding currently requires temperature=0; "
-            "random tree verification is not supported."
-        )
-
     greedy = _verify_uses_greedy(
         is_all_greedy=sampling_info.is_all_greedy,
         is_cpu=_is_cpu,
@@ -1044,6 +1038,12 @@ def eagle_sample(
             sampling_fn = chain_speculative_sampling_triton
             if get_spec().speculative_use_block_verification:
                 sampling_fn = partial(sampling_fn, block_verification=True)
+        elif is_mlu() and verify_input.tree_topk > 1:
+            from sglang.kernels.ops.speculative.target_only_sampling import (
+                tree_speculative_sampling_target_only_triton,
+            )
+
+            sampling_fn = tree_speculative_sampling_target_only_triton
         else:
             sampling_fn = tree_speculative_sampling_target_only
 

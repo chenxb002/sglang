@@ -150,23 +150,22 @@ class TestSamplingMaskValidation(CustomTestCase):
             forwarded_counts.append(tokenized_request.top_logprobs_num)
         self.assertEqual(forwarded_counts, [5, 0, 0, 7])
 
-    def test_mlu_tree_rejects_random_sampling_before_dispatch(self):
+    def test_mlu_tree_accepts_greedy_and_random_sampling(self):
         self.manager.model_config.token_id_vocab_size = 32
         self.manager.preferred_sampling_params = None
         self.manager.sampling_params_class = SamplingParams
         self.manager.tokenizer = None
         self.manager.fake_bootstrap_room_counter = 0
-        for device, topk, params, rejected in (
-            ("mlu", 2, {"temperature": 0.8}, True),
-            ("mlu", 2, {"temperature": 0}, False),
-            ("mlu", 4, {"temperature": 0.8, "top_k": 1}, False),
-            ("mlu", 1, {"temperature": 0.8}, False),
-            ("cpu", 2, {"temperature": 0.8}, False),
+        for topk, params in (
+            (2, {"temperature": 0.8}),
+            (2, {"temperature": 0}),
+            (4, {"temperature": 0.8, "top_k": 1}),
+            (4, {"temperature": 0.8, "top_k": 20, "top_p": 0.9}),
         ):
             with (
-                self.subTest(device=device, topk=topk, params=params),
+                self.subTest(topk=topk, params=params),
                 get_context().override_server_args(
-                    device=device,
+                    device="mlu",
                     speculative_algorithm="EAGLE3",
                     speculative_eagle_topk=topk,
                 ),
@@ -176,14 +175,12 @@ class TestSamplingMaskValidation(CustomTestCase):
                 self.manager.rid_to_state = {
                     req.rid: SimpleNamespace(time_stats=APIServerReqTimeStats())
                 }
-                if rejected:
-                    with self.assertRaisesRegex(ValueError, "greedy sampling"):
-                        self.manager._create_tokenized_object(req, "", req.input_ids)
-                else:
-                    result = self.manager._create_tokenized_object(
-                        req, "", req.input_ids
-                    )
-                    self.assertEqual(list(result.input_ids), [1, 2])
+                result = self.manager._create_tokenized_object(req, "", req.input_ids)
+                self.assertEqual(list(result.input_ids), [1, 2])
+                self.assertEqual(
+                    result.sampling_params.top_k,
+                    params.get("top_k", 1 if params["temperature"] == 0 else 1 << 30),
+                )
 
     def test_accepts_hard_exclusion(self):
         class BoundMask(DisallowedTokensLogitsProcessor):

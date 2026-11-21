@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Non-greedy tree verify on ROCm: Triton port of the CUDA
+"""Non-greedy tree verify on ROCm and MLU: Triton port of the CUDA
 ``tree_speculative_sampling_target_only`` (jit/include/sgl_kernel/speculative/sampling.cuh)."""
 
 import torch
