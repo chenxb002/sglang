@@ -21,6 +21,7 @@ from sglang.srt.utils import (
     is_cpu,
     is_cuda,
     is_hip,
+    is_mlu,
     is_mps,
     is_musa,
     is_npu,
@@ -43,6 +44,7 @@ _is_cpu = is_cpu()
 _is_xpu = is_xpu()
 _is_musa = is_musa()
 _is_mps = is_mps()
+_is_mlu = is_mlu()
 
 if _is_cuda:
     from sglang.kernels.ops.attention.rope import apply_rope_with_cos_sin_cache_inplace
@@ -131,6 +133,7 @@ class RotaryEmbedding(BaseFusedOp):
             and not (_is_npu)
             and not (_is_musa)
             and not (_is_mps)
+            and not (_is_mlu)
             and not (current_platform.is_out_of_tree())
         ):
             # rotary_embedding from sglang.kernels.ops.attention.rope and vllm._custom_ops has the same implementation.

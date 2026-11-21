@@ -212,3 +212,21 @@ register_kernel(
         capabilities=CUDA_ONLY,
     )
 )
+
+register_kernel(
+    KernelSpec(
+        op="sampling.top_k_renorm_prob",
+        backend=KernelBackend.TORCH,
+        target="sglang.kernels.ops.sampling.renorm_mlu:top_k_renorm_prob",
+        capabilities=frozenset({CapabilityRequirement.MLU}),
+    )
+)
+
+register_kernel(
+    KernelSpec(
+        op="sampling.top_p_renorm_prob",
+        backend=KernelBackend.TORCH,
+        target="sglang.kernels.ops.sampling.renorm_mlu:top_p_renorm_prob",
+        capabilities=frozenset({CapabilityRequirement.MLU}),
+    )
+)

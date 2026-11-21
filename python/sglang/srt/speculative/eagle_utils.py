@@ -45,6 +45,7 @@ from sglang.srt.utils import (
     is_cpu,
     is_cuda,
     is_hip,
+    is_mlu,
     is_xpu,
 )
 from sglang.srt.utils.async_probe import maybe_detect_nan, maybe_detect_oob
@@ -1037,6 +1038,12 @@ def eagle_sample(
             sampling_fn = chain_speculative_sampling_triton
             if get_spec().speculative_use_block_verification:
                 sampling_fn = partial(sampling_fn, block_verification=True)
+        elif is_mlu() and verify_input.tree_topk > 1:
+            from sglang.kernels.ops.speculative.target_only_sampling import (
+                tree_speculative_sampling_target_only_triton,
+            )
+
+            sampling_fn = tree_speculative_sampling_target_only_triton
         else:
             sampling_fn = tree_speculative_sampling_target_only
 

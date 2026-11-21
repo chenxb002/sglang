@@ -96,6 +96,7 @@ class DraftBackendFactory:
         _assert_draft_needs_no_conv_sidecar(self.draft_model_runner)
 
         backend_map = {
+            "mlu": self._create_mlu_decode_backend,
             "flashinfer": self._create_flashinfer_decode_backend,
             "triton": self._create_triton_decode_backend,
             "intel_amx": self._create_intel_amx_decode_backend,
@@ -125,6 +126,7 @@ class DraftBackendFactory:
             return self._create_qwen_qsa_draft_extend_backend()
 
         backend_map = {
+            "mlu": self._create_mlu_prefill_backend,
             "flashinfer": self._create_flashinfer_prefill_backend,
             "triton": self._create_triton_prefill_backend,
             "intel_amx": self._create_intel_amx_prefill_backend,
@@ -166,6 +168,20 @@ class DraftBackendFactory:
             )
             wrapped.decode_attention_backend_str = backend.decode_attention_backend_str
         return wrapped
+
+    def _create_mlu_decode_backend(self):
+        from sglang.srt.hardware_backend.mlu.attention.multi_step_backend import (
+            MLUMultiStepDraftBackend,
+        )
+
+        return "mlu", MLUMultiStepDraftBackend(
+            self.draft_model_runner, self.topk, self.speculative_num_steps
+        )
+
+    def _create_mlu_prefill_backend(self):
+        from sglang.srt.layers.attention.attention_registry import create_mlu_backend
+
+        return "mlu", create_mlu_backend(self.draft_model_runner)
 
     @staticmethod
     def _stamp_qsa(backend) -> None:

@@ -3,7 +3,14 @@
 A name is ``None`` where the platform has no kernel for it.
 """
 
-from sglang.srt.utils import is_cuda, is_gfx95_supported, is_hip, is_musa, is_npu
+from sglang.srt.utils import (
+    is_cuda,
+    is_gfx95_supported,
+    is_hip,
+    is_mlu,
+    is_musa,
+    is_npu,
+)
 
 if is_npu():
     try:
@@ -33,6 +40,10 @@ else:
 
         tree_speculative_sampling_target_only = (
             tree_speculative_sampling_target_only_triton
+        )
+    elif is_mlu():
+        from sglang.kernels.ops.speculative.sampling_mlu import (
+            chain_speculative_sampling_target_only as tree_speculative_sampling_target_only,
         )
     elif is_musa():
         try:

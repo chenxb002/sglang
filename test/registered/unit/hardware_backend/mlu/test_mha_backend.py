@@ -7,6 +7,7 @@ from types import SimpleNamespace as NS
 from unittest.mock import patch
 
 import torch
+import torch_mlu_ops
 
 from sglang.srt.environ import envs
 from sglang.srt.hardware_backend.mlu.attention.mha_backend import MLUMHABackend
@@ -28,7 +29,9 @@ class TestMLUMHABackend(CustomTestCase):
         stack.enter_context(envs.SGLANG_USE_HND_KVCACHE.override(True))
         torch.manual_seed(42)
 
-    def _create_fixture(self, mode, query_lens, mixed_prefill_reqs=None):
+    def _create_fixture(
+        self, mode, query_lens, mixed_prefill_reqs=None, context_len=128
+    ):
         pool = MLUMHATokenToKVPool(
             size=256,
             page_size=16,
@@ -48,7 +51,7 @@ class TestMLUMHABackend(CustomTestCase):
             NS(
                 device="mlu",
                 page_size=16,
-                model_config=NS(context_len=128),
+                model_config=NS(context_len=context_len),
                 req_to_token_pool=NS(req_to_token=req_to_token),
                 token_to_kv_pool=pool,
                 kv_cache_dtype=torch.bfloat16,
@@ -97,6 +100,12 @@ class TestMLUMHABackend(CustomTestCase):
             forward_mode=mode,
             out_cache_loc=loc,
         )
+        forward_batch.spec_info = NS(
+            tree_topk=1, draft_token_num=query_lens[0], num_tokens_per_req=query_lens[0]
+        )
+        if mode.is_target_verify():
+            forward_batch.seq_lens -= query_lens[0]
+            forward_batch.seq_lens_cpu -= query_lens[0]
         backend.init_forward_metadata(forward_batch)
         q = torch.randn(sum(query_lens), 8, 128, device="mlu", dtype=k.dtype)
         current_k, current_v = (
@@ -119,14 +128,20 @@ class TestMLUMHABackend(CustomTestCase):
             current_v=current_v,
         )
 
-    def _check_attention(self, mode, query_lens, mixed_prefill_reqs, window=-1):
+    def _check_attention(
+        self, mode, query_lens, mixed_prefill_reqs, window=-1, context_len=128
+    ):
         # Create the backend, batch, and input tensors.
-        fixture = self._create_fixture(mode, query_lens, mixed_prefill_reqs)
+        fixture = self._create_fixture(
+            mode, query_lens, mixed_prefill_reqs, context_len
+        )
         fixture.layer.sliding_window_size = window
 
         # Compute causal GQA outputs and LSE on CPU for each request.
         expected_outputs, expected_lses = [], []
         kv_lens = fixture.forward_batch.seq_lens_cpu.tolist()
+        if mode.is_target_verify():
+            kv_lens = [length + query_lens[0] for length in kv_lens]
         for q, k, v in zip(
             fixture.q.cpu().float().split(query_lens),
             fixture.k.cpu().float().split(kv_lens),
@@ -177,6 +192,8 @@ class TestMLUMHABackend(CustomTestCase):
             (ForwardMode.EXTEND, [21, 35], None),  # No cached prefixes.
             (ForwardMode.EXTEND, [2, 3], None),  # Both requests have cached prefixes.
             (ForwardMode.EXTEND, [21, 3], None),  # Only one request has a prefix.
+            (ForwardMode.TARGET_VERIFY, [4, 4], None),
+            (ForwardMode.DRAFT_EXTEND_V2, [4, 4], None),
             (ForwardMode.DECODE, [1, 1], None),  # One decode token per request.
             (ForwardMode.MIXED, [2, 3], 2),  # All requests are prefill.
             (ForwardMode.MIXED, [2, 1], 1),  # Cached-prefix prefill plus decode.
@@ -190,6 +207,28 @@ class TestMLUMHABackend(CustomTestCase):
     def test_mixed_sliding_window(self):
         """Prefill and decode must include the same left window boundary."""
         self._check_attention(ForwardMode.MIXED, [2, 1], 1, window=8)
+
+    def test_speculative_context_headroom(self):
+        # Context=32, but a valid prefix=27 plus eight verify tokens needs
+        # three pages. Draft decode and draft extend must retain them too.
+        for mode, query_lens in (
+            (ForwardMode.TARGET_VERIFY, [8, 8]),
+            (ForwardMode.DRAFT_EXTEND_V2, [8, 8]),
+            (ForwardMode.DECODE, [1, 1]),
+        ):
+            with (
+                self.subTest(mode=mode),
+                patch.object(
+                    torch_mlu_ops,
+                    "single_query_cached_kv_attn",
+                    wraps=torch_mlu_ops.single_query_cached_kv_attn,
+                ) as attention,
+            ):
+                self._check_attention(mode, query_lens, None, context_len=32)
+                for call in attention.call_args_list:
+                    kwargs = call.kwargs
+                    self.assertGreaterEqual(kwargs["block_tables"].shape[1] * 16, 35)
+                    self.assertGreaterEqual(kwargs["max_context_len"], 35)
 
     def test_invalid_mixed_prefill_reqs_rejected(self):
         """Reject missing or out-of-range prefill request counts in mixed batches."""

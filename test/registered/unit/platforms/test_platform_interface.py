@@ -775,6 +775,113 @@ class TestMluSRTPlatform(CustomTestCase):
                             handle_mlu_attention_backend_compatibility(args)
                         self.assertEqual(envs.SGLANG_USE_HND_KVCACHE.get(), use_hnd)
 
+    def test_eager_speculative_defaults_and_guards(self):
+        from sglang.srt.arg_groups.overrides import resolution_result
+        from sglang.srt.arg_groups.platform_hook import handle_mlu_backends
+        from sglang.srt.model_executor.cuda_graph_config import (
+            Backend,
+            CudaGraphConfig,
+            Phase,
+        )
+        from sglang.srt.server_args import ServerArgs
+
+        for algorithm in ("EAGLE", "EAGLE3", "NEXTN", "STANDALONE"):
+            args = ServerArgs(
+                model_path="unused",
+                device="mlu",
+                speculative_algorithm=algorithm,
+                cuda_graph_config=CudaGraphConfig(),
+            )
+            handle_mlu_backends(args)
+            for field, expected in (
+                ("speculative_eagle_topk", 1),
+                ("speculative_num_steps", 3),
+                ("speculative_num_draft_tokens", 4),
+                ("disable_cuda_graph", True),
+                ("disable_overlap_schedule", True),
+            ):
+                self.assertEqual(resolution_result(args, field), expected)
+            graph = resolution_result(args, "cuda_graph_config")
+            for phase in Phase.ALL:
+                self.assertEqual(getattr(graph, phase).backend, Backend.DISABLED)
+            self.assertEqual(args.cuda_graph_config.decode.backend, Backend.FULL)
+        for fields in (
+            {"speculative_eagle_topk": 2},
+            {"speculative_num_steps": 0},
+            {"speculative_num_steps": 2, "speculative_num_draft_tokens": 4},
+            {"speculative_draft_attention_backend": "triton"},
+        ):
+            with self.subTest(fields=fields):
+                args = ServerArgs(
+                    model_path="unused",
+                    device="mlu",
+                    speculative_algorithm="EAGLE",
+                    **fields,
+                )
+                with self.assertRaises(ValueError):
+                    handle_mlu_backends(args)
+
+    def test_triton_speculative_tree_defaults(self):
+        from sglang.srt.arg_groups.overrides import resolution_result
+        from sglang.srt.arg_groups.platform_hook import (
+            handle_mlu_attention_backend_compatibility,
+            handle_mlu_backends,
+        )
+        from sglang.srt.server_args import ServerArgs
+
+        for topk, tokens in ((1, 4), (2, 7), (4, 12)):
+            with self.subTest(topk=topk):
+                args = ServerArgs(
+                    model_path="unused",
+                    device="mlu",
+                    attention_backend="triton",
+                    speculative_algorithm="EAGLE3",
+                    speculative_eagle_topk=topk,
+                    speculative_num_steps=3,
+                    speculative_num_draft_tokens=tokens,
+                )
+                handle_mlu_backends(args)
+                handle_mlu_attention_backend_compatibility(args)
+                self.assertEqual(
+                    resolution_result(args, "speculative_eagle_topk"), topk
+                )
+                self.assertEqual(
+                    resolution_result(args, "speculative_num_draft_tokens"), tokens
+                )
+                self.assertTrue(resolution_result(args, "disable_overlap_schedule"))
+
+    def test_speculative_rejects_dp_and_incompatible_late_defaults(self):
+        from sglang.srt.arg_groups.overrides import declare_resolution
+        from sglang.srt.arg_groups.platform_hook import (
+            handle_mlu_attention_backend_compatibility,
+            handle_mlu_backends,
+        )
+        from sglang.srt.server_args import ServerArgs
+
+        args = ServerArgs(
+            model_path="unused",
+            device="mlu",
+            speculative_algorithm="EAGLE",
+            attn_dp_size=2,
+            tp_size=2,
+        )
+        with self.assertRaisesRegex(NotImplementedError, "DP attention"):
+            handle_mlu_backends(args)
+        args = ServerArgs(
+            model_path="unused",
+            device="mlu",
+            speculative_algorithm="EAGLE",
+        )
+        handle_mlu_backends(args)
+        declare_resolution(
+            args,
+            "test_model_defaults",
+            attention_backend="triton",
+            speculative_draft_attention_backend="mlu",
+        )
+        with self.assertRaisesRegex(ValueError, "same attention backend"):
+            handle_mlu_attention_backend_compatibility(args)
+
     def test_unsupported_runtime_settings_fail_during_resolution(self):
         """Reject unsupported runtime settings before model loading or execution."""
         from sglang.srt.arg_groups.platform_hook import (
@@ -789,7 +896,7 @@ class TestMluSRTPlatform(CustomTestCase):
             ("decode_attention_backend", "flashinfer", ValueError),
             ("sampling_backend", "flashinfer", ValueError),
             ("quantization", "awq", NotImplementedError),
-            ("speculative_algorithm", "EAGLE", NotImplementedError),
+            ("speculative_algorithm", "NGRAM", NotImplementedError),
         ):
             with self.subTest(field=field, value=value):
                 # A valid base backend must not hide an incompatible phase override.

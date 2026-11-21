@@ -150,6 +150,38 @@ class TestSamplingMaskValidation(CustomTestCase):
             forwarded_counts.append(tokenized_request.top_logprobs_num)
         self.assertEqual(forwarded_counts, [5, 0, 0, 7])
 
+    def test_mlu_tree_accepts_greedy_and_random_sampling(self):
+        self.manager.model_config.token_id_vocab_size = 32
+        self.manager.preferred_sampling_params = None
+        self.manager.sampling_params_class = SamplingParams
+        self.manager.tokenizer = None
+        self.manager.fake_bootstrap_room_counter = 0
+        for topk, params in (
+            (2, {"temperature": 0.8}),
+            (2, {"temperature": 0}),
+            (4, {"temperature": 0.8, "top_k": 1}),
+            (4, {"temperature": 0.8, "top_k": 20, "top_p": 0.9}),
+        ):
+            with (
+                self.subTest(topk=topk, params=params),
+                get_context().override_server_args(
+                    device="mlu",
+                    speculative_algorithm="EAGLE3",
+                    speculative_eagle_topk=topk,
+                ),
+            ):
+                req = GenerateReqInput(input_ids=[1, 2], sampling_params=params)
+                req.normalize_batch_and_arguments()
+                self.manager.rid_to_state = {
+                    req.rid: SimpleNamespace(time_stats=APIServerReqTimeStats())
+                }
+                result = self.manager._create_tokenized_object(req, "", req.input_ids)
+                self.assertEqual(list(result.input_ids), [1, 2])
+                self.assertEqual(
+                    result.sampling_params.top_k,
+                    params.get("top_k", 1 if params["temperature"] == 0 else 1 << 30),
+                )
+
     def test_accepts_hard_exclusion(self):
         class BoundMask(DisallowedTokensLogitsProcessor):
             def __call__(self, logits, custom_param_list=None):

@@ -24,7 +24,7 @@ from sglang.srt.arg_groups.overrides import (
 from sglang.srt.environ import envs
 from sglang.srt.hardware_backend.mlx.runtime import use_mlx
 from sglang.srt.model_executor.cuda_graph_config import Backend, Phase, with_phase
-from sglang.srt.runtime_context import get_platform
+from sglang.srt.runtime_context import attn_dp_enabled_of, get_platform
 from sglang.srt.utils.device import is_host_cpu_arm64
 
 logger = logging.getLogger(__name__)
@@ -58,7 +58,7 @@ def handle_mlu_backends(server_args: Any):
             "MLU inference currently requires unquantized weights."
         )
     if cfg.speculative_algorithm is not None:
-        raise NotImplementedError("MLU speculative decoding is not supported yet.")
+        handle_mlu_speculative_defaults(server_args)
     if cfg.sampling_backend not in (None, "pytorch"):
         raise ValueError("MLU inference requires the pytorch sampling backend.")
     if cfg.sampling_backend is None:
@@ -67,6 +67,80 @@ def handle_mlu_backends(server_args: Any):
         )
     if cfg.page_size is None:
         declare_resolution(server_args, "handle_mlu_backends", page_size=16)
+
+
+def handle_mlu_speculative_defaults(server_args: Any) -> None:
+    """Synchronous eager speculation: native MLU chains or Triton trees."""
+    cfg = resolving_view(server_args)
+    if cfg.speculative_algorithm not in (
+        "EAGLE",
+        "EAGLE3",
+        "NEXTN",
+        "STANDALONE",
+    ):
+        raise NotImplementedError(
+            "MLU supports EAGLE/EAGLE3/NEXTN/STANDALONE speculative decoding."
+        )
+    prefill_backend, decode_backend = attention_backends_of(cfg)
+    use_triton = prefill_backend == decode_backend == "triton"
+    topk = cfg.speculative_eagle_topk
+    if topk is None:
+        topk = 1
+    if topk < 1 or (not use_triton and topk != 1):
+        raise ValueError(
+            "MLU speculative decoding requires topk=1 unless both attention "
+            "phases use Triton; topk must be positive."
+        )
+    steps = cfg.speculative_num_steps
+    if steps is None:
+        steps = 3
+    if steps < 1:
+        raise ValueError("MLU speculative decoding requires positive num_steps.")
+    tokens = cfg.speculative_num_draft_tokens
+    if tokens is None:
+        tokens = steps + 1
+    if topk == 1 and tokens != steps + 1:
+        raise ValueError(
+            "MLU speculative decoding requires num_draft_tokens=num_steps+1."
+        )
+    if topk > 1 and not 2 <= tokens <= steps * topk + 1:
+        raise ValueError(
+            "MLU tree decoding requires 2 <= num_draft_tokens <= steps*topk+1."
+        )
+    backend = "triton" if use_triton else "mlu"
+    for field in (
+        "prefill_attention_backend",
+        "decode_attention_backend",
+        "speculative_draft_attention_backend",
+    ):
+        if getattr(cfg, field) not in (None, backend):
+            raise ValueError(
+                "MLU speculative target and draft must use the same attention backend."
+            )
+    if (
+        attn_dp_enabled_of(cfg)
+        or cfg.enable_multi_layer_eagle
+        or cfg.speculative_adaptive
+    ):
+        raise NotImplementedError(
+            "MLU eager speculative decoding does not yet support DP attention, multi-layer EAGLE or adaptive drafting."
+        )
+    graph_fields = {}
+    if cfg.cuda_graph_config is not None:
+        graph_config = cfg.cuda_graph_config
+        for phase in Phase.ALL:
+            graph_config = with_phase(graph_config, phase, backend=Backend.DISABLED)
+        graph_fields["cuda_graph_config"] = graph_config
+    declare_resolution(
+        server_args,
+        "handle_mlu_speculative_defaults",
+        speculative_num_steps=steps,
+        speculative_num_draft_tokens=tokens,
+        speculative_eagle_topk=topk,
+        disable_cuda_graph=True,
+        disable_overlap_schedule=True,
+        **graph_fields,
+    )
 
 
 def handle_mlu_attention_backend_compatibility(server_args: Any):
@@ -87,6 +161,13 @@ def handle_mlu_attention_backend_compatibility(server_args: Any):
             "MLU prefill and decode share a KV cache memory pool. "
             "Use the same attention backend to ensure compatible layouts."
         )
+    if cfg.speculative_algorithm is not None:
+        if prefill_backend != "triton" and cfg.speculative_eagle_topk != 1:
+            raise ValueError("MLU tree speculative decoding requires Triton attention.")
+        if cfg.speculative_draft_attention_backend not in (None, prefill_backend):
+            raise ValueError(
+                "MLU speculative target and draft must use the same attention backend."
+            )
     use_hnd = prefill_backend == "mlu"
     if (
         envs.SGLANG_USE_HND_KVCACHE.is_set()
