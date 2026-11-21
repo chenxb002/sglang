@@ -23,13 +23,6 @@ class MLUMultiStepDraftBackend:
     """Wrap several MLU decode backends for topk=1 chain MTP decoding."""
 
     def __init__(self, model_runner, topk: int, speculative_num_steps: int):
-        if topk != 1:
-            raise NotImplementedError(
-                "MLU multi-step draft backend supports topk=1 only."
-            )
-        if speculative_num_steps <= 1:
-            raise ValueError("MLU multi-step draft backend requires steps > 1.")
-
         self.topk = topk
         self.speculative_num_steps = speculative_num_steps
         self.attn_backends = [

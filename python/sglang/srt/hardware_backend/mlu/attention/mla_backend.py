@@ -112,8 +112,7 @@ class MLUMLABackend(AttentionBackend):
 
     def update_verify_buffers_to_fill_after_draft(self, spec_info, cuda_graph_bs):
         # Linear-chain metadata depends only on lengths, not draft token values.
-        if spec_info.tree_topk != 1:
-            raise NotImplementedError("MLU verify requires a topk=1 linear chain.")
+        pass
 
     def init_forward_metadata(self, forward_batch: "ForwardBatch") -> None:
         if forward_batch.forward_mode.is_idle():

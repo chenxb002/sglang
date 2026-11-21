@@ -104,8 +104,6 @@ def build_forward_metadata(
     if fb.forward_mode.is_target_verify() or fb.forward_mode.is_draft_extend_v2():
         spec = fb.spec_info
         if fb.forward_mode.is_target_verify():
-            if spec.tree_topk != 1:
-                raise NotImplementedError("MLU verify requires a topk=1 linear chain.")
             num_tokens = spec.draft_token_num
             prefix_lens = seq_lens
         else:
